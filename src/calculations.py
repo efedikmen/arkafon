@@ -20,16 +20,31 @@ def filter_data(df, period_string, selected_categories):
     if df.empty:
         return df
 
-    # 1. Kategori Filtresi (Regex ile çalışır)
-    # Eğer kullanıcı "Döviz" ve "Altın" seçtiyse, ikisini arayacak bir regex stringi oluştur: "DÖVİZ|ALTIN"
+    # KRİTİK DÜZELTME 1: Referans tarihi, veriler filtrelenip kaybolmadan EN BAŞTA alıyoruz.
+    max_date = df["tarih"].max()
+
+    # 1. Kategori Filtresi (Türkçe karakter sorununa karşı Dictionary Map)
+    keyword_map = {
+        "Döviz": "DÖVİZ",
+        "Altın": "ALTIN",
+        "Yabancı": "YABANCI",
+        "Hisse": "HİSSE",
+        "Kıymetli": "KIYMETLİ",
+        "Gümüş": "GÜMÜŞ"
+    }
+
     if selected_categories:
-        search_pattern = "|".join([cat.upper() for cat in selected_categories])
+        search_terms = [keyword_map.get(cat, cat.upper())
+                        for cat in selected_categories]
+        search_pattern = "|".join(search_terms)
         df = df[df["FONUNVAN"].str.contains(
             search_pattern, regex=True, na=False)]
 
-    # 2. Tarih Filtresi
-    max_date = df["tarih"].max()  # Verisetindeki en güncel tarih
+    # KRİTİK DÜZELTME 2: Eğer kategori seçimi sonrası tablo boşaldıysa, tarihi hesaplamaya çalışma, boş dön.
+    if df.empty:
+        return df
 
+    # 2. Tarih Filtresi
     if period_string == "Bugün":
         df = df[df["tarih"] == max_date]
     elif period_string == "Son 7 Gün":
@@ -37,7 +52,8 @@ def filter_data(df, period_string, selected_categories):
     elif period_string == "Son 30 Gün":
         df = df[df["tarih"] >= (max_date - pd.Timedelta(days=30))]
     elif period_string == "Yılbaşından Bugüne":
-        start_of_year = pd.Timestamp(year=max_date.year, month=1, day=1)
+        # int() ile ekstra bir güvenlik katmanı ekliyoruz
+        start_of_year = pd.Timestamp(year=int(max_date.year), month=1, day=1)
         df = df[df["tarih"] >= start_of_year]
 
     return df
