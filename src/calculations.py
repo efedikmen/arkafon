@@ -75,3 +75,28 @@ def get_top_funds(df, top_n=10):
     sorted_funds = grouped.sort_values(
         by="net_giris_tl", ascending=False).head(top_n)
     return sorted_funds
+
+
+def get_trend_data(df):
+    """Zaman içindeki kümülatif net girişi kategoriler bazında ve TEFAS Toplam olarak hesaplar."""
+    if df.empty:
+        return pd.DataFrame()
+
+    # 1. Kategori bazında kümülatif hesaplama
+    daily_grouped = df.groupby(["tarih", "ana_kategori"])[
+        "net_giris_tl"].sum().reset_index()
+    daily_grouped = daily_grouped.sort_values(by="tarih")
+    daily_grouped["kumulatif_giris"] = daily_grouped.groupby("ana_kategori")[
+        "net_giris_tl"].cumsum()
+
+    # 2. TEFAS Genel Toplam hesaplama (Sistemdeki tüm seçili verinin toplamı)
+    total_grouped = df.groupby(["tarih"])["net_giris_tl"].sum().reset_index()
+    total_grouped = total_grouped.sort_values(by="tarih")
+    total_grouped["kumulatif_giris"] = total_grouped["net_giris_tl"].cumsum()
+    # Ayrı bir çizgi olarak ekliyoruz
+    total_grouped["ana_kategori"] = "TEFAS TOPLAM"
+
+    # 3. İkisini birleştir
+    final_trend = pd.concat([daily_grouped, total_grouped], ignore_index=True)
+
+    return final_trend
