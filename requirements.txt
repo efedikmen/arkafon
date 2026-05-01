@@ -1,1 +1,10 @@
-streamlit
+# Web Arayüzü
+streamlit>=1.30.0
+
+# Veri İşleme ve Analiz
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+
+# Görselleştirme
+plotly>=5.18.0
