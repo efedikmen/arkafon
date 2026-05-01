@@ -36,6 +36,5 @@ ENV/
 # Arkafon Özel Kurallar
 # =========================
 # Ham ve işlenmiş finansal veriler asla Git'e gitmemeli
-data/
-*.parquet
+
 

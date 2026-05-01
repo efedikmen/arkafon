@@ -78,23 +78,22 @@ def get_top_funds(df, top_n=10):
     return sorted_funds
 
 
-def get_trend_data(filtered_df, date_filtered_df):
-    """
-    Zaman içindeki kümülatif net girişi hesaplar.
-    filtered_df: Sadece seçilen kategorileri içerir.
-    date_filtered_df: Kategoriden bağımsız, tüm TEFAS pazarını içerir.
-    """
+def get_trend_data(filtered_df, date_filtered_df, secilen_alt_kategori=[]):
+    """Zaman içindeki kümülatif net girişi hesaplar."""
     if filtered_df.empty or date_filtered_df.empty:
         return pd.DataFrame()
 
     df_plot = filtered_df.copy()
 
-    # 3. İSTEK: Döviz seçildiyse ana kategori yerine alt kırılımları göster
-    df_plot["kategori_etiketi"] = np.where(
-        df_plot["ana_kategori"] == "Döviz",
-        df_plot["alt_kategori"],
-        df_plot["ana_kategori"]
-    )
+    # AKILLI DÖVİZ MANTIĞI: Kullanıcı alt kırılım seçtiyse parçala, yoksa "Döviz" olarak bırak.
+    if secilen_alt_kategori and len(secilen_alt_kategori) > 0:
+        df_plot["kategori_etiketi"] = np.where(
+            df_plot["ana_kategori"] == "Döviz",
+            df_plot["alt_kategori"],
+            df_plot["ana_kategori"]
+        )
+    else:
+        df_plot["kategori_etiketi"] = df_plot["ana_kategori"]
 
     # 1. Kategori bazında kümülatif hesaplama
     daily_grouped = df_plot.groupby(["tarih", "kategori_etiketi"])[
@@ -103,7 +102,7 @@ def get_trend_data(filtered_df, date_filtered_df):
     daily_grouped["kumulatif_giris"] = daily_grouped.groupby("kategori_etiketi")[
         "net_giris_tl"].cumsum()
 
-    # 2. İSTEK: TEFAS Genel Toplam (Filtrelenmemiş Pazar Verisinden!)
+    # 2. TEFAS Genel Toplam (Filtrelenmemiş Pazar Verisinden)
     total_grouped = date_filtered_df.groupby(
         ["tarih"])["net_giris_tl"].sum().reset_index()
     total_grouped = total_grouped.sort_values(by="tarih")
