@@ -36,7 +36,7 @@ def classify_fund(fund_name):
             return "Döviz", "Yabancı Hisse"
         if re.search(r"YABANCI.*BORÇLANMA|BORÇLANMA.*YABANCI", f):
             return "Döviz", "Yabancı Tahvil"
-        return "Döviz", "Genel Döviz"
+        return "Döviz", "Döviz PPF"
 
     # 5. Serbest Fonlar (Sadece varlık sınıfı belirtilmeyen "Saf" serbest fonlar buraya düşecek)
     if re.search(r"SERBEST", f):

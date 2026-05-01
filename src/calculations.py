@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import streamlit as st
 import os
 from src.config import MASTER_DATA_PATH
@@ -77,26 +78,39 @@ def get_top_funds(df, top_n=10):
     return sorted_funds
 
 
-def get_trend_data(df):
-    """Zaman içindeki kümülatif net girişi kategoriler bazında ve TEFAS Toplam olarak hesaplar."""
-    if df.empty:
+def get_trend_data(filtered_df, date_filtered_df):
+    """
+    Zaman içindeki kümülatif net girişi hesaplar.
+    filtered_df: Sadece seçilen kategorileri içerir.
+    date_filtered_df: Kategoriden bağımsız, tüm TEFAS pazarını içerir.
+    """
+    if filtered_df.empty or date_filtered_df.empty:
         return pd.DataFrame()
 
+    df_plot = filtered_df.copy()
+
+    # 3. İSTEK: Döviz seçildiyse ana kategori yerine alt kırılımları göster
+    df_plot["kategori_etiketi"] = np.where(
+        df_plot["ana_kategori"] == "Döviz",
+        df_plot["alt_kategori"],
+        df_plot["ana_kategori"]
+    )
+
     # 1. Kategori bazında kümülatif hesaplama
-    daily_grouped = df.groupby(["tarih", "ana_kategori"])[
+    daily_grouped = df_plot.groupby(["tarih", "kategori_etiketi"])[
         "net_giris_tl"].sum().reset_index()
     daily_grouped = daily_grouped.sort_values(by="tarih")
-    daily_grouped["kumulatif_giris"] = daily_grouped.groupby("ana_kategori")[
+    daily_grouped["kumulatif_giris"] = daily_grouped.groupby("kategori_etiketi")[
         "net_giris_tl"].cumsum()
 
-    # 2. TEFAS Genel Toplam hesaplama (Sistemdeki tüm seçili verinin toplamı)
-    total_grouped = df.groupby(["tarih"])["net_giris_tl"].sum().reset_index()
+    # 2. İSTEK: TEFAS Genel Toplam (Filtrelenmemiş Pazar Verisinden!)
+    total_grouped = date_filtered_df.groupby(
+        ["tarih"])["net_giris_tl"].sum().reset_index()
     total_grouped = total_grouped.sort_values(by="tarih")
     total_grouped["kumulatif_giris"] = total_grouped["net_giris_tl"].cumsum()
-    # Ayrı bir çizgi olarak ekliyoruz
-    total_grouped["ana_kategori"] = "TEFAS TOPLAM"
+    total_grouped["kategori_etiketi"] = "TEFAS TOPLAM"
 
-    # 3. İkisini birleştir
+    # İkisini birleştir
     final_trend = pd.concat([daily_grouped, total_grouped], ignore_index=True)
 
     return final_trend
