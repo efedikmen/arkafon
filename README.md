@@ -33,7 +33,7 @@ arkafon/
 ├── requirements.txt        # Python bağımlılıkları
 ├── streamlit_app.py        # Streamlit uygulamasının ana giriş noktası
 └── README.md               # Proje dokümantasyonu
-
+```
 
 ## 🚀 Kurulum ve Çalıştırma
 
@@ -44,25 +44,29 @@ Projeyi çalıştırmak için sisteminizde Python 3.10+ kurulu olmalıdır. İzo
 # Repo'yu klonlayın veya dizine gidin
 cd arkafon
 
+
 # Sanal ortam oluşturun ve aktif edin (macOS/Linux)
 python3 -m venv .arkafon_env
 source .arkafon_env/bin/activate
 
 # Bağımlılıkları yükleyin
 pip install -r requirements.txt
+```
 
 ## 2. Veri Hazırlığı
 
 Ham TEFAS `.parquet` dosyalarını `data/raw/` dizininin içine yerleştirin. Ardından veri motorunu çalıştırarak işlenmiş ana dosyayı oluşturun:
-
+```bash
 # Bu komut raw dosyaları okur, net akışları hesaplar ve processed klasörüne kaydeder
 python src/data_loader.py
+```
 
 ## 3. Uygulamayı Başlatma
 
-#Veri hazırlığı tamamlandıktan sonra Streamlit sunucusunu başlatın:
+# Veri hazırlığı tamamlandıktan sonra Streamlit sunucusunu başlatın:
+```bash
 streamlit run streamlit_app.py
-
+```
 Uygulama varsayılan olarak http://localhost:8501 adresinde çalışacaktır.
 
 
@@ -78,5 +82,5 @@ Görselleştirme: Plotly, Altair
 
 Depolama: Apache Parquet formatı
 
-📄 Lisans
+## 📄 Lisans
 Bu proje MIT Lisansı altında lisanslanmıştır.
