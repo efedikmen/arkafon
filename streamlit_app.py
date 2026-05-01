@@ -40,7 +40,10 @@ zaman_araligi = st.sidebar.radio(
 )
 
 # Ana Kategori Seçimi
-ana_kategoriler = ["PPF (TL)", "Tahvil (TL)", "Hisse (TL)", "Döviz", "Diğer"]
+ana_kategoriler = [
+    "PPF (TL)", "Tahvil (TL)", "Hisse (TL)", "Döviz",
+    "Serbest Fon", "Fon Sepeti", "Katılım Fonu", "Değişken Fon", "Karma Fon", "Diğer"
+]
 secilen_ana_kategori = st.sidebar.multiselect(
     "Ana Kategori",
     options=ana_kategoriler,
