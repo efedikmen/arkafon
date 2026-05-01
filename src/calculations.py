@@ -15,36 +15,25 @@ def load_data():
     return pd.read_parquet(MASTER_DATA_PATH)
 
 
-def filter_data(df, period_string, selected_categories):
-    """Kullanıcının seçtiği tarih aralığına ve fon türüne göre DataFrame'i filtreler."""
+def filter_data(df, period_string, selected_main, selected_sub):
     if df.empty:
         return df
 
-    # KRİTİK DÜZELTME 1: Referans tarihi, veriler filtrelenip kaybolmadan EN BAŞTA alıyoruz.
-    max_date = df["tarih"].max()
-
-    # 1. Kategori Filtresi (Türkçe karakter sorununa karşı Dictionary Map)
-    keyword_map = {
-        "Döviz": "DÖVİZ",
-        "Altın": "ALTIN",
-        "Yabancı": "YABANCI",
-        "Hisse": "HİSSE",
-        "Kıymetli": "KIYMETLİ",
-        "Gümüş": "GÜMÜŞ"
-    }
-
-    if selected_categories:
-        search_terms = [keyword_map.get(cat, cat.upper())
-                        for cat in selected_categories]
-        search_pattern = "|".join(search_terms)
-        df = df[df["FONUNVAN"].str.contains(
-            search_pattern, regex=True, na=False)]
-
-    # KRİTİK DÜZELTME 2: Eğer kategori seçimi sonrası tablo boşaldıysa, tarihi hesaplamaya çalışma, boş dön.
-    if df.empty:
-        return df
+    # 1. Kategori Filtresi (Doğrudan yeni kolonlardan okuyoruz)
+    if selected_main:
+        # Eğer Döviz seçildiyse ama alt kategori de belirtildiyse ikisini de dikkate al
+        if "Döviz" in selected_main and selected_sub:
+            df = df[
+                (df["ana_kategori"].isin([m for m in selected_main if m != "Döviz"])) |
+                ((df["ana_kategori"] == "Döviz") &
+                 (df["alt_kategori"].isin(selected_sub)))
+            ]
+        else:
+            df = df[df["ana_kategori"].isin(selected_main)]
 
     # 2. Tarih Filtresi
+    max_date = df["tarih"].max()
+
     if period_string == "Bugün":
         df = df[df["tarih"] == max_date]
     elif period_string == "Son 7 Gün":
@@ -52,7 +41,6 @@ def filter_data(df, period_string, selected_categories):
     elif period_string == "Son 30 Gün":
         df = df[df["tarih"] >= (max_date - pd.Timedelta(days=30))]
     elif period_string == "Yılbaşından Bugüne":
-        # int() ile ekstra bir güvenlik katmanı ekliyoruz
         start_of_year = pd.Timestamp(year=int(max_date.year), month=1, day=1)
         df = df[df["tarih"] >= start_of_year]
 

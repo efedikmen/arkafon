@@ -1,7 +1,7 @@
 import os
 import re
 import pandas as pd
-from config import RAW_DATA_DIR, PROCESSED_DATA_DIR, MASTER_DATA_PATH, FUND_PATTERN
+from config import RAW_DATA_DIR, PROCESSED_DATA_DIR, MASTER_DATA_PATH
 
 
 def build_master_data():
@@ -41,10 +41,8 @@ def build_master_data():
             continue
 
         # Filtreleme
-        df_filtered = df[df["FONUNVAN"].str.contains(
-            FUND_PATTERN, flags=re.IGNORECASE, regex=True)].copy()
-        df_filtered = df_filtered[["FONKODU",
-                                   "FONUNVAN", "FIYAT", "TEDPAYSAYISI"]]
+        df_filtered = df[["FONKODU", "FONUNVAN",
+                          "FIYAT", "TEDPAYSAYISI"]].copy()
 
         if prev_df is not None:
             merged = pd.merge(df_filtered, prev_df, on="FONKODU",
@@ -62,13 +60,27 @@ def build_master_data():
     if all_daily_flows:
         print("📦 Parçalar birleştiriliyor...")
         master_df = pd.concat(all_daily_flows, ignore_index=True)
+
+        # --- YENİ EKLENEN KISIM: TASNİFLEME ---
+        print("🔍 Fonlar SPK standartlarına göre tasnif ediliyor...")
+        from src.classifier import classify_fund
+
+        # Sadece benzersiz fonları al (Performans için)
+        unique_funds = master_df[["FONKODU", "FONUNVAN"]].drop_duplicates()
+
+        # Classify fonksiyonunu uygula ve 2 yeni kolon yarat
+        unique_funds[["ana_kategori", "alt_kategori"]] = pd.DataFrame(
+            unique_funds["FONUNVAN"].apply(classify_fund).tolist(),
+            index=unique_funds.index
+        )
+
+        # Etiketleri ana dataya yapıştır
+        master_df = master_df.merge(
+            unique_funds[["FONKODU", "ana_kategori", "alt_kategori"]], on="FONKODU", how="left")
+        # --------------------------------------
+
         os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
         master_df.to_parquet(MASTER_DATA_PATH)
-        print(
-            f"✅ Başarılı! {len(master_df)} satırlık master veri oluşturuldu.")
-        print(f"📍 Dosya Konumu: {MASTER_DATA_PATH}")
-    else:
-        print("⚠️ Hesaplanacak geçerli veri bulunamadı.")
 
 
 if __name__ == "__main__":

@@ -27,17 +27,31 @@ if df.empty:
 # --- YAN MENÜ (SIDEBAR) ---
 st.sidebar.title("Kontrol Paneli")
 
+
 zaman_araligi = st.sidebar.radio(
     "Analiz Aralığı",
     ["Bugün", "Son 7 Gün", "Son 30 Gün", "Yılbaşından Bugüne"],
     index=2
 )
 
-fon_turu = st.sidebar.multiselect(
-    "Fon Kategorisi",
-    ["Döviz", "Altın", "Yabancı", "Hisse", "Kıymetli"],
-    default=["Döviz", "Altın"]
+# Ana Kategori Seçimi
+ana_kategoriler = ["PPF (TL)", "Tahvil (TL)", "Hisse (TL)", "Döviz", "Diğer"]
+secilen_ana_kategori = st.sidebar.multiselect(
+    "Ana Kategori",
+    options=ana_kategoriler,
+    default=["Döviz", "Hisse (TL)"]
 )
+
+# Alt Kategori Seçimi (Sadece Döviz seçildiğinde ekrana gelir - Conditional UI)
+secilen_alt_kategori = []
+if "Döviz" in secilen_ana_kategori:
+    alt_kategoriler = ["Kıymetli Maden / Emtia", "Eurobond",
+                       "Yabancı Hisse", "Yabancı Tahvil", "Genel Döviz"]
+    secilen_alt_kategori = st.sidebar.multiselect(
+        "Döviz Kırılımları",
+        options=alt_kategoriler,
+        default=alt_kategoriler  # Varsayılan olarak hepsini seç
+    )
 
 st.sidebar.markdown("---")
 # Dinamik olarak verinin son tarihini menüde gösterelim ki kullanıcı bilsin
@@ -45,7 +59,8 @@ son_tarih = df["tarih"].max().strftime("%d.%m.%Y")
 st.sidebar.caption(f"Veriseti Son Güncelleme: **{son_tarih}**")
 
 # --- İŞ MANTIĞI: FİLTRELEME ---
-filtered_df = filter_data(df, zaman_araligi, fon_turu)
+filtered_df = filter_data(
+    df, zaman_araligi, secilen_ana_kategori, secilen_alt_kategori)
 
 # --- ÖZET METRİKLER (KPI) ---
 total_inflow, top_fund, unique_funds = get_kpi_metrics(filtered_df)
