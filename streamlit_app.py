@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import plotly.express as px
 from src.calculations import load_data, filter_data, get_kpi_metrics, get_top_funds
@@ -25,6 +26,10 @@ if df.empty:
     st.stop()
 
 # --- YAN MENÜ (SIDEBAR) ---
+# Logo
+st.sidebar.image(os.path.join("app", "assets", "logo.png"),
+                 use_container_width=True)
+
 st.sidebar.title("Kontrol Paneli")
 
 
@@ -39,7 +44,7 @@ ana_kategoriler = ["PPF (TL)", "Tahvil (TL)", "Hisse (TL)", "Döviz", "Diğer"]
 secilen_ana_kategori = st.sidebar.multiselect(
     "Ana Kategori",
     options=ana_kategoriler,
-    default=["Döviz", "Hisse (TL)"]
+    default=[]
 )
 
 # Alt Kategori Seçimi (Sadece Döviz seçildiğinde ekrana gelir - Conditional UI)
