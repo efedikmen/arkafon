@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import numpy as np
 from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR, MASTER_DATA_PATH
 
 
@@ -51,19 +52,42 @@ def build_master_data():
     # 1. KRİTİK ADIM: Fon koduna ve tarihe göre kesin sıralama
     master_df = master_df.sort_values(by=["FONKODU", "tarih"])
 
-    # 2. KRİTİK ADIM: Önceki günün payını yan kolona kaydır
+    # 2. Önceki günün verilerini yan kolona kaydır
+    master_df["FIYAT_prev"] = master_df.groupby("FONKODU")["FIYAT"].shift(1)
     master_df["TEDPAYSAYISI_prev"] = master_df.groupby(
         "FONKODU")["TEDPAYSAYISI"].shift(1)
 
-    # 3. GERÇEK NAKİT AKIŞI HESABI
-    # Eğer previous NaN ise (verinin ilk günü), farkı 0 kabul et. Böylece Portföy büyüklüğü Inflow gibi görünmez!
+    # 3. YENİ ADIM: SPLIT (BÖLÜNME) ANOMALİSİ DÜZELTİCİ (Data Healer)
+    print("🩹 Fon bölünme (split) anomalileri tespit edilip onarılıyor...")
+    master_df['fiyat_degisim'] = master_df['FIYAT'] / master_df['FIYAT_prev']
+    master_df['split_factor'] = 1.0
+
+    # Fiyat 5 kattan fazla arttıysa veya 5'te 1'ine düştüyse
+    sapma_mask = (master_df['fiyat_degisim'] > 5.0) | (
+        master_df['fiyat_degisim'] < 0.2)
+
+    if sapma_mask.any():
+        # Sapan değerleri 10'un en yakın kuvvetine yuvarla (Örn: 100.39 -> 10^2 = 100)
+        master_df.loc[sapma_mask, 'split_factor'] = 10 ** np.round(
+            np.log10(master_df.loc[sapma_mask, 'fiyat_degisim']))
+
+    # Dünkü payı bölünme çarpanına bölerek bugünün elmasıyla eşitliyoruz
+    master_df['normalize_pay_onceki'] = master_df['TEDPAYSAYISI_prev'] / \
+        master_df['split_factor']
+
+    # 4. GERÇEK NAKİT AKIŞI HESABI
+    # Eğer previous NaN ise (verinin ilk günü), farkı 0 kabul et. Böylece Portföy büyüklüğü Inflow gibi görünmez.
     master_df["pay_farki"] = master_df["TEDPAYSAYISI"] - \
-        master_df["TEDPAYSAYISI_prev"]
+        master_df["normalize_pay_onceki"]
     master_df["pay_farki"] = master_df["pay_farki"].fillna(0)
 
     master_df["net_giris_tl"] = master_df["pay_farki"] * master_df["FIYAT"]
 
-    # 4. Tasnifleme (Classifier)
+    # Bellek temizliği: Geçici hesaplama kolonlarını uçur
+    master_df = master_df.drop(columns=['FIYAT_prev', 'TEDPAYSAYISI_prev',
+                               'fiyat_degisim', 'split_factor', 'normalize_pay_onceki', 'pay_farki'])
+
+    # 5. Tasnifleme (Classifier)
     print("🔍 Fonlar SPK standartlarına göre tasnif ediliyor...")
     from src.classifier import classify_fund
     unique_funds = master_df[["FONKODU", "FONUNVAN"]].drop_duplicates()
@@ -83,7 +107,7 @@ def build_master_data():
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     master_df.to_parquet(MASTER_DATA_PATH)
     print(
-        f"✅ Başarılı! {len(master_df)} satırlık gerçek nakit akışı verisi oluşturuldu.")
+        f"✅ Başarılı! {len(master_df)} satırlık temizlenmiş nakit akışı verisi oluşturuldu.")
 
 
 if __name__ == "__main__":
