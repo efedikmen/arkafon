@@ -37,13 +37,18 @@ def get_filtered_df(days: str = "ALL", categories: str = ""):
 
     # 2. Tarih Filtresi
     if days and days.upper() != "ALL":
-        try:
-            d = int(days)
-            max_date = f_df["tarih"].max()
-            start_date = max_date - timedelta(days=d)
+        max_date = f_df["tarih"].max()
+        if days.upper() == "YTD":
+            # Yılbaşından bugüne
+            start_date = pd.Timestamp(year=max_date.year, month=1, day=1)
             f_df = f_df[f_df["tarih"] >= start_date]
-        except ValueError:
-            pass  # Eğer çevrilemez bir değer gelirse tarihi filtreleme
+        else:
+            try:
+                d = int(days)
+                start_date = max_date - timedelta(days=d)
+                f_df = f_df[f_df["tarih"] >= start_date]
+            except ValueError:
+                pass
 
     return f_df
 
