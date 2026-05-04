@@ -25,30 +25,20 @@ else:
 # --- MERKEZİ FİLTRE MOTORU ---
 
 
-def get_filtered_df(days: str = "ALL", categories: str = ""):
+def get_filtered_df(start: str = "", end: str = "", categories: str = ""):
     f_df = df.copy()
     if f_df.empty:
         return f_df
 
-    # 1. Kategori Filtresi
     if categories:
         cat_list = [c.strip() for c in categories.split(",")]
         f_df = f_df[f_df["ana_kategori"].isin(cat_list)]
 
-    # 2. Tarih Filtresi
-    if days and days.upper() != "ALL":
-        max_date = f_df["tarih"].max()
-        if days.upper() == "YTD":
-            # Yılbaşından bugüne
-            start_date = pd.Timestamp(year=max_date.year, month=1, day=1)
-            f_df = f_df[f_df["tarih"] >= start_date]
-        else:
-            try:
-                d = int(days)
-                start_date = max_date - timedelta(days=d)
-                f_df = f_df[f_df["tarih"] >= start_date]
-            except ValueError:
-                pass
+    # STRICT ABSOLUTE DATES
+    if start and start != "undefined":
+        f_df = f_df[f_df["tarih"] >= pd.to_datetime(start)]
+    if end and end != "undefined":
+        f_df = f_df[f_df["tarih"] <= pd.to_datetime(end)]
 
     return f_df
 
@@ -56,8 +46,8 @@ def get_filtered_df(days: str = "ALL", categories: str = ""):
 
 
 @app.get("/api/macro/kpi")
-def get_macro_kpi(days: str = "ALL", categories: str = ""):
-    f_df = get_filtered_df(days, categories)
+def get_macro_kpi(start: str = "", end: str = "", categories: str = ""):
+    f_df = get_filtered_df(start, end, categories)
     if f_df.empty:
         return {"total_net_inflow": 0, "unique_funds": 0, "top_fund": "-"}
 
@@ -73,8 +63,8 @@ def get_macro_kpi(days: str = "ALL", categories: str = ""):
 
 
 @app.get("/api/macro/trend")
-def get_macro_trend(days: str = "ALL", categories: str = ""):
-    f_df = get_filtered_df(days, categories)
+def get_macro_trend(start: str = "", end: str = "", categories: str = ""):
+    f_df = get_filtered_df(start, end, categories)
     if f_df.empty:
         return []
 
@@ -90,8 +80,8 @@ def get_macro_trend(days: str = "ALL", categories: str = ""):
 
 
 @app.get("/api/macro/top10")
-def get_macro_top10(days: str = "ALL", categories: str = ""):
-    f_df = get_filtered_df(days, categories)
+def get_macro_top10(start: str = "", end: str = "", categories: str = ""):
+    f_df = get_filtered_df(start, end, categories)
     if f_df.empty:
         return []
 
@@ -104,8 +94,8 @@ def get_macro_top10(days: str = "ALL", categories: str = ""):
 
 
 @app.get("/api/macro/universe")
-def get_macro_universe(days: str = "ALL", categories: str = ""):
-    f_df = get_filtered_df(days, categories)
+def get_macro_universe(start: str = "", end: str = "", categories: str = ""):
+    f_df = get_filtered_df(start, end, categories)
     if f_df.empty:
         return []
 
@@ -136,23 +126,17 @@ def get_fund_list():
 
 
 # --- 6. ENDPOINT: Tekil Fon Detayları (Drill-down Sayfası İçin) ---
-
-
 @app.get("/api/fund/{fund_code}")
-def get_fund_details(fund_code: str, days: str = "ALL"):
+def get_fund_details(fund_code: str, start: str = "", end: str = ""):
     f_df = df[df["FONKODU"] == fund_code].sort_values("tarih")
     if f_df.empty:
         return {"error": "Fon bulunamadı"}
 
-    # TARİH FİLTRESİNİ UYGULA
-    if days and days.upper() != "ALL":
-        try:
-            d = int(days)
-            max_date = f_df["tarih"].max()
-            start_date = max_date - timedelta(days=d)
-            f_df = f_df[f_df["tarih"] >= start_date]
-        except ValueError:
-            pass
+    # MUTLAK TARİH FİLTRESİNİ UYGULA
+    if start and start != "undefined":
+        f_df = f_df[f_df["tarih"] >= pd.to_datetime(start)]
+    if end and end != "undefined":
+        f_df = f_df[f_df["tarih"] <= pd.to_datetime(end)]
 
     if f_df.empty:
         return {"error": "Seçilen tarih aralığında veri bulunamadı"}
