@@ -153,3 +153,43 @@ def get_fund_details(fund_code: str, start: str = "", end: str = ""):
         "kpi": {"inflow": inflow, "perf": perf, "latestPrice": end_p},
         "chart": chart_data.rename(columns={"tarih": "date", "FIYAT": "price", "net_giris_tl": "flow"}).to_dict(orient="records")
     }
+
+# --- 7. ENDPOINT: Sankey Akış Verisi ---
+
+
+@app.get("/api/macro/flow")
+def get_macro_flow(start: str = "", end: str = "", categories: str = ""):
+    f_df = get_filtered_df(start, end, categories)
+    if f_df.empty:
+        return {"nodes": [], "links": []}
+
+    # 1. Kaynak (Kategori) -> Hedef (Fon Kodu) bazlı grupla
+    flow_df = f_df.groupby(["ana_kategori", "FONKODU"])[
+        "net_giris_tl"].sum().reset_index()
+
+    # 2. Sadece pozitif akışları (girişleri) al - Sankey negatif değer sevmez
+    flow_df = flow_df[flow_df["net_giris_tl"] > 0]
+
+    # 3. Görsel karmaşayı önlemek için en büyük 20 akışı al
+    flow_df = flow_df.sort_values("net_giris_tl", ascending=False).head(20)
+
+    # 4. Sankey Formatı Hazırlama (Nodes & Links)
+    nodes = []
+    links = []
+
+    # Benzersiz isimler listesi (Kategoriler + Fonlar)
+    all_names = pd.concat(
+        [flow_df["ana_kategori"], flow_df["FONKODU"]]).unique().tolist()
+    nodes = [{"name": name} for name in all_names]
+
+    # İsimlerin index'lerini bulup linkleri oluştur
+    name_to_idx = {name: i for i, name in enumerate(all_names)}
+
+    for _, row in flow_df.iterrows():
+        links.append({
+            "source": name_to_idx[row["ana_kategori"]],
+            "target": name_to_idx[row["FONKODU"]],
+            "value": round(float(row["net_giris_tl"]), 2)
+        })
+
+    return {"nodes": nodes, "links": links}
