@@ -202,43 +202,51 @@ def get_macro_flow_sankey(start: str = "", end: str = "", categories: str = ""):
     if f_df.empty:
         return {"nodes": [], "links": []}
 
-    # Sadece Kategori bazında net akışların toplamını al
+    # 1. Seçili Dönem İçi Akış (Net Flow)
     flow_df = f_df.groupby("ana_kategori")["net_giris_tl"].sum().reset_index()
-
-    # 0 olanları (veya sıfıra çok yakın olanları) ele
     flow_df = flow_df[flow_df["net_giris_tl"].abs() > 1000]
 
-    # Ana Düğümlerimiz (Sistem Dışı)
+    if flow_df.empty:
+        return {"nodes": [], "links": []}
+
+    # 2. TOPLAM HACİM (AUM) HESAPLAMASI: Başlangıçtan 'end' tarihine kadar kümülatif
+    end_dt = pd.to_datetime(
+        end) if end and end != "undefined" else df["tarih"].max()
+    cat_list = flow_df["ana_kategori"].tolist()
+
+    aum_df = df[(df["ana_kategori"].isin(cat_list)) & (df["tarih"] <= end_dt)]
+    aum_dict = aum_df.groupby("ana_kategori")["net_giris_tl"].sum().to_dict()
+
     INFLOW_NODE = "Sermaye Girişi"
     OUTFLOW_NODE = "Sermaye Çıkışı"
 
-    # Benzersiz isimler (Tüm kategoriler + Ana Düğümler)
-    all_names = [INFLOW_NODE, OUTFLOW_NODE] + \
-        flow_df["ana_kategori"].unique().tolist()
-    nodes = [{"name": name} for name in all_names]
+    # Node'lara AUM bilgisini ekliyoruz (Giriş/Çıkış ana kütlelerine 0 veriyoruz)
+    all_names = [INFLOW_NODE, OUTFLOW_NODE] + cat_list
+    nodes = [{"name": name, "aum": aum_dict.get(
+        name, 0)} for name in all_names]
     name_to_idx = {name: i for i, name in enumerate(all_names)}
 
     links = []
-
     for _, row in flow_df.iterrows():
         val = float(row["net_giris_tl"])
         cat = row["ana_kategori"]
+        cat_aum = float(aum_dict.get(cat, 0))  # O kategorinin Toplam Hacmi
 
         if val > 0:
-            # Para Piyasaya Giriyor: Sistem Dışı -> Kategori
             links.append({
                 "source": name_to_idx[INFLOW_NODE],
                 "target": name_to_idx[cat],
                 "value": val,
-                "type": "inflow"  # Frontend bu type'a göre yeşil boyayacak
+                "type": "inflow",
+                "cat_aum": cat_aum  # Link'in içine gömüyoruz
             })
         elif val < 0:
-            # Para Piyasadan Çıkıyor: Kategori -> Sistem Dışı
             links.append({
                 "source": name_to_idx[cat],
                 "target": name_to_idx[OUTFLOW_NODE],
                 "value": abs(val),
-                "type": "outflow"  # Frontend bu type'a göre kırmızı boyayacak
+                "type": "outflow",
+                "cat_aum": cat_aum  # Link'in içine gömüyoruz
             })
 
     return {"nodes": nodes, "links": links}

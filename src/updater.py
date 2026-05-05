@@ -22,8 +22,11 @@ def heal_missing_data():
             pass
 
     # 2. Olması gereken İŞ GÜNLERİNİ (Pazartesi-Cuma) hesapla
-    start_date = date(2025, 9, 27)  # Projemizin miladı
+    start_date = date(2026, 4, 30)  # Projemizin miladı
     end_date = date.today() - timedelta(days=1)
+
+    # 2020 çalışmadı
+    # end_date = date(2020, 9, 1)
 
     # KRİTİK NOKTA: Sadece iş günlerini alıyoruz (Hafta sonları elendi)
     expected_dates = set(pd.bdate_range(start=start_date, end=end_date).date)
