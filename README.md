@@ -86,6 +86,6 @@ streamlit run streamlit_app.py
 * Güvenlik: JWT (python-jose), Passlib (Bcrypt), Pydantic  
    
 
-## 📄 Lisans
+📄 Lisans
 
 Bu proje MIT Lisansı altında lisanslanmıştır.
