@@ -259,6 +259,56 @@ def get_macro_flow_sankey(start: str = "", end: str = "", categories: str = ""):
     return {"nodes": nodes, "links": links}
 
 
+# --- 9. ENDPOINT: Portföy Kıyaslama Grafiği (Base 100) ---
+@app.get("/api/portfolio/chart")
+def get_portfolio_chart(funds: str = "", start: str = "", end: str = ""):
+    f_df = get_filtered_df(start, end)
+    if f_df.empty:
+        return []
+
+    try:
+        # Fiyatları tarih ve fon koduna göre pivot tablo yapıyoruz
+        pivot_df = f_df.pivot_table(
+            index="tarih", columns="FONKODU", values="FIYAT")
+        # Boşlukları (hafta sonu vs.) bir önceki fiyatla doldur
+        pivot_df = pivot_df.ffill().dropna(axis=1, how='all')
+
+        if pivot_df.empty:
+            return []
+
+        # İlk günün fiyatını 100 kabul ederek tüm seriyi endeksle (Base 100)
+        base_prices = pivot_df.iloc[0]
+        index_df = (pivot_df / base_prices) * 100
+
+        result = []
+        fund_list = [f.strip() for f in funds.split(",")] if funds else []
+
+        for date, row in index_df.iterrows():
+            # Tüm TEFAS evreninin o günkü ortalama getirisi
+            tefas_val = row.mean()
+
+            # Kullanıcının sepetindeki fonların o günkü ortalama getirisi
+            valid_funds = [
+                f for f in fund_list if f in row.index and not pd.isna(row[f])]
+            port_val = row[valid_funds].mean() if valid_funds else 100.0
+
+            day_idx = len(result)
+
+            result.append({
+                "date": date.strftime('%Y-%m-%d'),
+                "portfolio": round(port_val, 2) if not pd.isna(port_val) else 100.0,
+                "tefas": round(tefas_val, 2) if not pd.isna(tefas_val) else 100.0,
+                # Altın ve USD DB'de olmadığı için şimdilik temsili hafif yükselen trend
+                "gold": round(100 + (day_idx * 0.08), 2),
+                "usd": round(100 + (day_idx * 0.03), 2)
+            })
+
+        return result
+    except Exception as e:
+        print("Chart Error:", e)
+        return []
+
+
 # ==========================================
 # 🔐 AUTHENTICATION ENDPOINTS
 # ==========================================
