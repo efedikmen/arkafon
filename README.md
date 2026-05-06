@@ -68,24 +68,25 @@ python src/data_loader.py
 
 ## 3. Uygulamayı Başlatma
 
-# Veri hazırlığı tamamlandıktan sonra Streamlit sunucusunu başlatın:
+
 
 ```bash
+# Veri hazırlığı tamamlandıktan sonra Streamlit sunucusunu başlatın:
 streamlit run streamlit_app.py
 ```
 
 
 ## 🛠 Kullanılan Teknolojiler
 
-Dil: Python 3
+* Dil: Python 3
 
-Veri İşleme: Pandas, PyArrow, NumPy
+* Veri İşleme: Pandas, PyArrow, NumPy
 
-Arayüz: Streamlit
+* Arayüz: Streamlit
 
-Görselleştirme: Plotly, Altair
+* Görselleştirme: Plotly, Altair
 
-Depolama: Apache Parquet formatı
+* Depolama: Apache Parquet formatı
 
 ## 📄 Lisans
 
