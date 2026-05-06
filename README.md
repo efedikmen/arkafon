@@ -83,8 +83,8 @@ streamlit run streamlit_app.py
 
 * Veritabanı & ORM: SQLite, SQLAlchemy
 
-* Güvenlik: JWT (python-jose), Passlib (Bcrypt), Pydantic
-
+* Güvenlik: JWT (python-jose), Passlib (Bcrypt), Pydantic  
+   
 
 ## 📄 Lisans
 
