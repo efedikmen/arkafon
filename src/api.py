@@ -5,12 +5,19 @@ import numpy as np
 import os
 from datetime import timedelta
 from src.config import MASTER_DATA_PATH
+from sqlalchemy.orm import Session
+from fastapi import Depends, HTTPException
+from src.db import get_db, User, Portfolio, PortfolioItem, UserCreate, UserLogin, UserResponse, Token, BasketUpdate
+from src.auth import get_password_hash, verify_password, create_access_token, get_current_user
 
 app = FastAPI(title="Arkafon API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8080",
+                   "http://127.0.0.1:8080",
+                   "http://localhost:5173",
+                   "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -250,3 +257,83 @@ def get_macro_flow_sankey(start: str = "", end: str = "", categories: str = ""):
             })
 
     return {"nodes": nodes, "links": links}
+
+
+# ==========================================
+# 🔐 AUTHENTICATION ENDPOINTS
+# ==========================================
+
+@app.post("/api/auth/register", response_model=UserResponse)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.email == user.email).first()
+    if db_user:
+        raise HTTPException(
+            status_code=400, detail="Bu email adresi zaten kayıtlı.")
+
+    hashed_password = get_password_hash(user.password)
+    new_user = User(email=user.email,
+                    hashed_password=hashed_password, full_name=user.full_name)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    # Kullanıcı oluşunca otomatik boş bir portföy de açalım
+    new_portfolio = Portfolio(user_id=new_user.id, name="Ana Sepetim")
+    db.add(new_portfolio)
+    db.commit()
+
+    return new_user
+
+
+@app.post("/api/auth/login", response_model=Token)
+def login(req: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == req.email).first()
+    if not user or not verify_password(req.password, user.hashed_password):
+        raise HTTPException(
+            status_code=401, detail="Hatalı e-posta veya şifre.")
+
+    access_token = create_access_token(data={"sub": user.email})
+    return {"access_token": access_token, "token_type": "bearer", "name": user.full_name}
+
+
+@app.get("/api/auth/me", response_model=UserResponse)
+def read_users_me(current_user: User = Depends(get_current_user)):
+    # React açıldığında "Ben kimim, oturumum açık mı?" diye buraya soracak
+    return current_user
+
+
+# ==========================================
+# 💼 PORTFOLIO (SEPET) ENDPOINTS
+# ==========================================
+
+@app.get("/api/portfolio/basket")
+def get_my_basket(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Kullanıcının sepetini bul
+    portfolio = db.query(Portfolio).filter(
+        Portfolio.user_id == current_user.id).first()
+    if not portfolio:
+        return {"funds": []}
+
+    items = db.query(PortfolioItem).filter(
+        PortfolioItem.portfolio_id == portfolio.id).all()
+    fund_codes = [item.fund_code for item in items]
+    return {"funds": fund_codes}
+
+
+@app.post("/api/portfolio/basket")
+def update_my_basket(basket: BasketUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # 1. Kullanıcının sepetini bul
+    portfolio = db.query(Portfolio).filter(
+        Portfolio.user_id == current_user.id).first()
+
+    # 2. Eski sepetin içini tamamen temizle
+    db.query(PortfolioItem).filter(
+        PortfolioItem.portfolio_id == portfolio.id).delete()
+
+    # 3. Frontend'den gelen yeni listeyi veritabanına yaz
+    for code in basket.funds:
+        new_item = PortfolioItem(portfolio_id=portfolio.id, fund_code=code)
+        db.add(new_item)
+
+    db.commit()
+    return {"status": "success", "message": "Sepet başarıyla güncellendi", "funds": basket.funds}
