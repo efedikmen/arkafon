@@ -95,6 +95,7 @@ if __name__ == "__main__":
         try:
             # İşletim sisteminde "python src/data_loader.py" komutunu çalıştırır
             subprocess.run(["python", "src/data_loader.py"], check=True)
+            subprocess.run(["python", "src/market_data.py"], check=True)
             print("🚀 ETL tamamlandı. Arkafon API güncel veriyle hizmet vermeye hazır!")
         except subprocess.CalledProcessError:
             print("❌ ETL (Veri birleştirme) sürecinde bir hata oluştu!")

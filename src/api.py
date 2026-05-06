@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from fastapi import Depends, HTTPException
 from src.db import get_db, User, Portfolio, PortfolioItem, UserCreate, UserLogin, UserResponse, Token, BasketUpdate
 from src.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from src.market_data import get_market_data
 
 app = FastAPI(title="Arkafon API")
 
@@ -267,40 +268,55 @@ def get_portfolio_chart(funds: str = "", start: str = "", end: str = ""):
         return []
 
     try:
-        # Fiyatları tarih ve fon koduna göre pivot tablo yapıyoruz
         pivot_df = f_df.pivot_table(
             index="tarih", columns="FONKODU", values="FIYAT")
-        # Boşlukları (hafta sonu vs.) bir önceki fiyatla doldur
         pivot_df = pivot_df.ffill().dropna(axis=1, how='all')
 
         if pivot_df.empty:
             return []
 
-        # İlk günün fiyatını 100 kabul ederek tüm seriyi endeksle (Base 100)
         base_prices = pivot_df.iloc[0]
         index_df = (pivot_df / base_prices) * 100
+        market_df = get_market_data(start, end)
+
+        if not market_df.empty:
+            base_gold = market_df['gold_usd'].iloc[0]
+            base_usd = market_df['usd_try'].iloc[0]
+            market_df['gold_idx'] = (market_df['gold_usd'] / base_gold) * 100
+            market_df['usd_idx'] = (market_df['usd_try'] / base_usd) * 100
 
         result = []
         fund_list = [f.strip() for f in funds.split(",")] if funds else []
 
         for date, row in index_df.iterrows():
-            # Tüm TEFAS evreninin o günkü ortalama getirisi
             tefas_val = row.mean()
-
-            # Kullanıcının sepetindeki fonların o günkü ortalama getirisi
             valid_funds = [
                 f for f in fund_list if f in row.index and not pd.isna(row[f])]
             port_val = row[valid_funds].mean() if valid_funds else 100.0
 
-            day_idx = len(result)
+            # Ham verileri ve indeksleri çekiyoruz
+            has_market = not market_df.empty and date in market_df.index
+            gold_val = float(market_df.loc[date, 'gold_idx']) if has_market else (
+                result[-1]["gold"] if result else 100.0)
+            usd_val = float(market_df.loc[date, 'usd_idx']) if has_market else (
+                result[-1]["usd"] if result else 100.0)
+
+            # Hover'da görünecek ham fiyatlar
+            raw_gold = float(
+                market_df.loc[date, 'gold_usd']) if has_market else 0
+            raw_usd = float(
+                market_df.loc[date, 'usd_try']) if has_market else 0
 
             result.append({
                 "date": date.strftime('%Y-%m-%d'),
-                "portfolio": round(port_val, 2) if not pd.isna(port_val) else 100.0,
-                "tefas": round(tefas_val, 2) if not pd.isna(tefas_val) else 100.0,
-                # Altın ve USD DB'de olmadığı için şimdilik temsili hafif yükselen trend
-                "gold": round(100 + (day_idx * 0.08), 2),
-                "usd": round(100 + (day_idx * 0.03), 2)
+                "portfolio": round(port_val, 2),
+                "tefas": round(tefas_val, 2),
+                "gold": round(gold_val, 2),
+                "usd": round(usd_val, 2),
+                "raw": {
+                    "gold": round(raw_gold, 2),
+                    "usd": round(raw_usd, 2)
+                }
             })
 
         return result
