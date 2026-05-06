@@ -1,14 +1,15 @@
 import os
 import glob
 import time
+import subprocess
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from tefas_client import Tefas
 from src.config import RAW_DATA_DIR
 
 
-def heal_missing_data():
-    print("🩺 Arkafon Data Healer (Veri İyileştirme) Başlatılıyor...")
+def fetch_daily_data():
+    print("🤖 Arkafon Veri Botu (Self-Healer) Başlatılıyor...")
 
     # 1. Klasördeki mevcut tarihleri bul
     files = glob.glob(os.path.join(RAW_DATA_DIR, "tefas_data_*.parquet"))
@@ -21,24 +22,22 @@ def heal_missing_data():
         except:
             pass
 
-    # 2. Olması gereken İŞ GÜNLERİNİ (Pazartesi-Cuma) hesapla
+    # 2. Olması gereken İŞ GÜNLERİNİ hesapla
     start_date = date(2026, 4, 30)  # Projemizin miladı
-    end_date = date.today() - timedelta(days=1)
+    # Bot 19:00'da çalıştığı için bugünün verisi gelmiş olur
+    end_date = date.today()
 
-    # 2020 çalışmadı
-    # end_date = date(2020, 9, 1)
-
-    # KRİTİK NOKTA: Sadece iş günlerini alıyoruz (Hafta sonları elendi)
+    # Sadece iş günlerini alıyoruz (Hafta sonları elendi)
     expected_dates = set(pd.bdate_range(start=start_date, end=end_date).date)
 
     # 3. Gerçek delikleri tespit et (Beklenen İş Günleri - Klasördeki Günler)
     missing_dates = sorted(expected_dates - existing_dates)
 
     if not missing_dates:
-        print("✅ Veri tabanında hiçbir delik yok. Veri bütünlüğü %100!")
-        return
+        print("✅ Veritabanında hiçbir delik yok. Tüm günler güncel!")
+        return False  # Yeni veri inmediğini belirt
 
-    print(f"🔍 Tespit edilen eksik (delik) gün sayısı: {len(missing_dates)}")
+    print(f"🔍 İndirilecek yeni/eksik iş günü sayısı: {len(missing_dates)}")
 
     # 4. Eksik günleri nokta atışı TEFAS'tan iste
     with Tefas() as tefas:
@@ -47,9 +46,8 @@ def heal_missing_data():
             file_path = os.path.join(
                 RAW_DATA_DIR, f"tefas_data_{date_str}.parquet")
 
-            print(f"⏳ Eksik yama yapılıyor: {date_str}...")
+            print(f"⏳ Çekiliyor: {date_str}...")
             try:
-                # Sadece o eksik güne özel sorgu
                 data = tefas.fetch(start_date=missing_date,
                                    end_date=missing_date)
 
@@ -68,25 +66,35 @@ def heal_missing_data():
                     if flattened:
                         df = pd.DataFrame(flattened)
                         df.drop(columns=["tarih"]).to_parquet(file_path)
-                        print(f"  ✅ {date_str} başarıyla yamalandı.")
+                        print(f"  ✅ {date_str} başarıyla kaydedildi.")
                 else:
-                    # Hafta içlerine denk gelen Resmi Tatiller (Örn: 29 Ekim, 1 Mayıs) boş döner.
                     print(
-                        f"  ⚠️ {date_str} boş döndü (Büyük ihtimalle resmi tatil).")
-
-                    # Opsiyonel Zeka: Resmi tatilleri her seferinde tekrar tekrar API'ye sormamak için
-                    # içi boş bir "hayalet" parquet dosyası oluşturabilirsin.
-                    # pd.DataFrame(columns=["FONKODU", "FONUNVAN", "FIYAT", "TEDPAYSAYISI"]).to_parquet(file_path)
+                        f"  ⚠️ {date_str} boş döndü (Resmi tatil olabilir). Hayalet dosya oluşturuluyor...")
+                    # Resmi tatilleri her seferinde tekrar sormamak için içi boş "hayalet" dosya
+                    pd.DataFrame(
+                        columns=["FONKODU", "FONUNVAN", "FIYAT", "TEDPAYSAYISI"]).to_parquet(file_path)
 
             except Exception as e:
                 print(f"  ❌ Hata: {date_str} çekilemedi ({type(e).__name__}).")
 
             # API'yi yormamak için kısa mola
-            time.sleep(10)
+            time.sleep(5)
+
+    return True  # Yeni veri indiğini belirt
 
 
 if __name__ == "__main__":
     os.makedirs(RAW_DATA_DIR, exist_ok=True)
 
-    # Günlük rutinde veya sistemde bir boşluk olduğundan şüphelendiğinde bunu çalıştırabilirsin
-    heal_missing_data()
+    # 1. Yeni veya eksik verileri indir
+    is_updated = fetch_daily_data()
+
+    # 2. Eğer klasöre yeni bir dosya eklendiyse, Master Veriyi (ETL) tetikle
+    if is_updated:
+        print("🔄 Yeni veri tespit edildi, ETL (Data Loader) süreci başlatılıyor...")
+        try:
+            # İşletim sisteminde "python src/data_loader.py" komutunu çalıştırır
+            subprocess.run(["python", "src/data_loader.py"], check=True)
+            print("🚀 ETL tamamlandı. Arkafon API güncel veriyle hizmet vermeye hazır!")
+        except subprocess.CalledProcessError:
+            print("❌ ETL (Veri birleştirme) sürecinde bir hata oluştu!")
