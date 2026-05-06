@@ -8,30 +8,27 @@ Uygulama, karmaşık finansal verileri "Separation of Concerns" (Sorumlulukları
 
 ## 📐 Mimari Tasarım
 
-Arkafon, performansı maksimize etmek için iki katmanlı bir mimari kullanır:
-1. **Data Pipeline (ETL):** Ham `.parquet` dosyaları okunur, net giriş/çıkış hesaplamaları (TEDPAYSAYISI Δ * FIYAT) yapılır ve Streamlit'in belleğe saniyeler içinde alabileceği tek bir `master_flow_data.parquet` dosyasına sıkıştırılır.
-2. **Presentation Layer (UI):** Streamlit ve Plotly kullanılarak, sadece önceden işlenmiş veriler üzerinde milisaniyelik filtreleme işlemleri yapılarak minimalist bir arayüz sunulur.
-
+Arkafon, performansı maksimize etmek için üç katmanlı bir mimari kullanır:
+1. **Data Pipeline (ETL):** Ham `.parquet` dosyaları Pandas ile okunur, net giriş/çıkış hesaplamaları hızlıca yapılarak belleğe alınır.
+2. **API Katmanı (FastAPI):** Bellekteki (veya işlenmiş) veriler, milisaniyeler içinde RESTful uç noktalar (endpoints) üzerinden Frontend'e (React) sunulur.
+3. **Güvenlik & Veritabanı:** Kullanıcı oturumları (Bcrypt + JWT) ve kişiselleştirilmiş fon sepetleri, SQLAlchemy ORM aracılığıyla SQLite veritabanında güvenle depolanır.
 ## 📂 Klasör Yapısı
 
 Proje, temiz kod ve modülerlik standartlarına göre organize edilmiştir:
 
 ```text
 arkafon/
-├── app/                    # Frontend (Kullanıcı Arayüzü) Katmanı
-│   ├── components/         # Modüler UI bileşenleri (Sidebar, Metrikler, Grafikler)
 ├── data/                   # Veri Deposu (Git tarafından yok sayılır)
 │   ├── processed/          # İşlenmiş ve optimize edilmiş ana veri setleri
 │   └── raw/                # TEFAS'tan çekilen günlük ham parquet dosyaları
-├── notebooks/              # Veri keşfi ve prototipleme (Jupyter)
-├── src/                    # Backend (İş Mantığı ve Veri İşleme) Katmanı
-│   ├── calculations.py     # Finansal algoritmalar ve metrik hesaplamaları
-│   ├── config.py           # Ortam değişkenleri, yollar ve regex pattern'ları
+├── src/                    # Backend (İş Mantığı ve API) Katmanı
+│   ├── api.py              # FastAPI ana uygulaması ve route tanımları
+│   ├── auth.py             # JWT üretimi, şifre hashleme ve güvenlik
+│   ├── db.py               # SQLAlchemy veritabanı modelleri ve şemalar
+│   ├── config.py           # Ortam değişkenleri ve yollar
 │   └── data_loader.py      # ETL süreçleri ve Parquet I/O işlemleri
-├── .devcontainer/          # Geliştirme ortamı yapılandırması
 ├── .gitignore              # Versiyon kontrolü dışında bırakılacak dosyalar
 ├── requirements.txt        # Python bağımlılıkları
-├── streamlit_app.py        # Streamlit uygulamasının ana giriş noktası
 └── README.md               # Proje dokümantasyonu
 ```
 
@@ -63,7 +60,7 @@ Ham TEFAS `.parquet` dosyalarını `data/raw/` dizininin içine yerleştirin. Ar
 
 
 ```bash
-python src/data_loader.py
+python -m uvicorn src.api:app --reload
 ```
 
 ## 3. Uygulamayı Başlatma
@@ -80,13 +77,14 @@ streamlit run streamlit_app.py
 
 * Dil: Python 3
 
+* Web Çerçevesi: FastAPI, Uvicorn
+
 * Veri İşleme: Pandas, PyArrow, NumPy
 
-* Arayüz: Streamlit
+* Veritabanı & ORM: SQLite, SQLAlchemy
 
-* Görselleştirme: Plotly, Altair
+* Güvenlik: JWT (python-jose), Passlib (Bcrypt), Pydantic
 
-* Depolama: Apache Parquet formatı
 
 ## 📄 Lisans
 
