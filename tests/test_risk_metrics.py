@@ -24,11 +24,16 @@ def test_sharpe_positive_for_positive_excess():
 
 
 def test_sortino_only_penalises_downside():
-    # Same magnitude excess but skewed downside vs upside
+    # No downside at all -> +inf (positive mean excess); all-downside -> negative.
     upside = _series([0.01] * 100)
     downside = _series([-0.01] * 100)
     assert rm.sortino_ratio(upside, rf_annual=0.0) > 0
     assert rm.sortino_ratio(downside, rf_annual=0.0) < 0
+
+
+def test_sortino_returns_nan_on_flat_zero():
+    flat = _series([0.0] * 30)
+    assert pd.isna(rm.sortino_ratio(flat, rf_annual=0.0))
 
 
 def test_max_drawdown_simple():
@@ -61,7 +66,8 @@ def test_net_of_tax_only_taxes_gains():
 
 
 def test_real_return_below_nominal_under_high_inflation():
-    idx = pd.date_range("2024-01-01", periods=12, freq="M")
+    # ME = month-end; M is deprecated in pandas >= 2.2.
+    idx = pd.date_range("2024-01-01", periods=12, freq="ME")
     nominal = pd.Series([100, 102, 105, 108, 112, 115, 118, 122, 125, 130, 135, 140], index=idx)
     cpi = pd.Series([100, 105, 110, 115, 121, 127, 134, 141, 148, 155, 163, 171], index=idx)
     real = rm.real_return_series(nominal, cpi)
