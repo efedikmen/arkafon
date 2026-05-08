@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Float, Date
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from pydantic import BaseModel, EmailStr
@@ -86,6 +86,38 @@ class Token(BaseModel):
     token_type: str
 
 
+
 class BasketUpdate(BaseModel):
     funds: List[str]
     name: Optional[str] = None
+
+
+class BasketCreate(BaseModel):
+    name: str
+
+
+class LotIn(BaseModel):
+    fund_code: str
+    acquired_at: Optional[date] = None
+    acquisition_price: Optional[float] = None
+    quantity: Optional[float] = None
+
+
+class LotOut(BaseModel):
+    id: int
+    fund_code: str
+    acquired_at: Optional[date] = None
+    acquisition_price: Optional[float] = None
+    quantity: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BasketDetail(BaseModel):
+    id: int
+    name: str
+    items: List[LotOut]
+
+    class Config:
+        from_attributes = True

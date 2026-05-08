@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config import MASTER_DATA_PATH, BASE_DIR
 from sqlalchemy.orm import Session
 
-from src.config import MASTER_DATA_PATH
 from src.db import (
     get_db, User, Portfolio, PortfolioItem,
     UserCreate, UserLogin, UserResponse, Token, BasketUpdate,
@@ -17,6 +16,7 @@ from src.auth import (
     get_password_hash, verify_password, create_access_token, get_current_user,
 )
 from src.market_data import get_market_data
+from src.portfolio_routes import register_portfolio_routes
 from src import risk_metrics as rm
 
 app = FastAPI(title="Arkafon API")
@@ -64,8 +64,6 @@ def _reload_master(force: bool = False) -> bool:
         df = pd.read_parquet(MASTER_DATA_PATH)
         _DF_MTIME = mtime
         return True
-
-# --- MERKEZİ FİLTRE MOTORU ---
 
 
 @app.on_event("startup")
@@ -294,8 +292,7 @@ def get_portfolio_chart(funds: str = "", start: str = "", end: str = ""):
         index_df = (pivot_df / base_prices) * 100
         market_df = get_market_data(start, end)
         if not market_df.empty:
-            base_gold = market_df['gold_usd'].iloc[0]
-            base_usd = market_df['usd_try'].iloc[0]
+            base_gold = market_df['gold_usd'].iloc[0]; base_usd = market_df['usd_try'].iloc[0]
             market_df['gold_idx'] = (market_df['gold_usd'] / base_gold) * 100
             market_df['usd_idx'] = (market_df['usd_try'] / base_usd) * 100
         result = []
@@ -534,61 +531,5 @@ def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-# ==========================================
-# PORTFOLIOS  (multi-portfolio safe)
-# ==========================================
-
-def _get_or_create_portfolio(
-    user_id: int, db: Session, name: str | None = None,
-) -> Portfolio:
-    """Pick the named portfolio if given; otherwise the first; otherwise create."""
-    q = db.query(Portfolio).filter(Portfolio.user_id == user_id)
-    if name:
-        portfolio = q.filter(Portfolio.name == name).first()
-        if portfolio:
-            return portfolio
-    portfolio = q.first()
-    if portfolio:
-        return portfolio
-    portfolio = Portfolio(user_id=user_id, name=name or "Ana Sepetim")
-    db.add(portfolio)
-    db.commit()
-    db.refresh(portfolio)
-    return portfolio
-
-
-@app.get("/api/portfolio/baskets")
-def list_baskets(current_user: User = Depends(get_current_user),
-                  db: Session = Depends(get_db)):
-    rows = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).all()
-    return [{"id": p.id, "name": p.name} for p in rows]
-
-
-@app.get("/api/portfolio/basket")
-def get_my_basket(
-    name: str = "",
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    portfolio = _get_or_create_portfolio(current_user.id, db, name or None)
-    items = db.query(PortfolioItem).filter(
-        PortfolioItem.portfolio_id == portfolio.id).all()
-    return {
-        "name": portfolio.name,
-        "funds": [i.fund_code for i in items],
-    }
-
-
-@app.post("/api/portfolio/basket")
-def update_my_basket(
-    basket: BasketUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    portfolio = _get_or_create_portfolio(current_user.id, db, basket.name)
-    db.query(PortfolioItem).filter(
-        PortfolioItem.portfolio_id == portfolio.id).delete()
-    for code in basket.funds:
-        db.add(PortfolioItem(portfolio_id=portfolio.id, fund_code=code))
-    db.commit()
-    return {"status": "success", "name": portfolio.name, "funds": basket.funds}
+# Multi-basket CRUD lives in src/portfolio_routes.py.
+register_portfolio_routes(app)
