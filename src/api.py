@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from src.config import MASTER_DATA_PATH, BASE_DIR
 from sqlalchemy.orm import Session
 
 from src.config import MASTER_DATA_PATH
@@ -16,6 +17,7 @@ from src.auth import (
     get_password_hash, verify_password, create_access_token, get_current_user,
 )
 from src.market_data import get_market_data
+from src import risk_metrics as rm
 
 app = FastAPI(title="Arkafon API")
 
@@ -31,6 +33,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# CPI (TÜFE) lazy-loaded once at startup. Used by the real-return endpoint.
+CPI_PATH = os.path.join(BASE_DIR, "data", "cpi_tufe.csv")
+if os.path.exists(CPI_PATH):
+    _cpi = pd.read_csv(CPI_PATH, parse_dates=["date"]).set_index("date")["cpi"].sort_index()
+else:
+    _cpi = pd.Series(dtype=float)
+
+
 
 # ----- master parquet with auto-reload --------------------------------------
 # The updater bot rewrites this file daily. We previously read it once at
@@ -52,6 +64,8 @@ def _reload_master(force: bool = False) -> bool:
         df = pd.read_parquet(MASTER_DATA_PATH)
         _DF_MTIME = mtime
         return True
+
+# --- MERKEZİ FİLTRE MOTORU ---
 
 
 @app.on_event("startup")
@@ -312,7 +326,181 @@ def get_portfolio_chart(funds: str = "", start: str = "", end: str = ""):
 
 
 # ==========================================
-# AUTH
+# 📊 RISK & RETURN ANALYTICS ENDPOINTS
+# ==========================================
+
+def _basket_for(current_user: User, db: Session) -> list[str]:
+    portfolio = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).first()
+    if not portfolio:
+        return []
+    items = db.query(PortfolioItem).filter(PortfolioItem.portfolio_id == portfolio.id).all()
+    return [i.fund_code for i in items]
+
+
+@app.get("/api/risk/sharpe")
+def api_sharpe(funds: str = "", start: str = "", end: str = "",
+               rf: float = rm.DEFAULT_RF_ANNUAL):
+    """Sharpe + Sortino for either an explicit basket or each fund individually."""
+    f_df = get_filtered_df(start, end)
+    if f_df.empty:
+        return {"funds": [], "portfolio": None}
+    prices = rm._pivot_prices(f_df)
+    codes = [c.strip() for c in funds.split(",") if c.strip()] if funds else []
+
+    per_fund = []
+    for c in (codes if codes else prices.columns[:50]):
+        if c not in prices.columns:
+            continue
+        r = prices[c].pct_change().dropna()
+        per_fund.append({
+            "code": c,
+            "sharpe": rm.sharpe_ratio(r, rf),
+            "sortino": rm.sortino_ratio(r, rf),
+            "volatility": float(r.std(ddof=1) * np.sqrt(rm.TRADING_DAYS)) if not r.empty else None,
+        })
+
+    portfolio_block = None
+    if codes:
+        port_returns = rm.portfolio_returns(prices, codes)
+        portfolio_block = {
+            "sharpe": rm.sharpe_ratio(port_returns, rf),
+            "sortino": rm.sortino_ratio(port_returns, rf),
+            "volatility": float(port_returns.std(ddof=1) * np.sqrt(rm.TRADING_DAYS)) if not port_returns.empty else None,
+        }
+
+    # JSON-safe NaN
+    def _clean(v):
+        if v is None: return None
+        try:
+            return None if pd.isna(v) else round(float(v), 4)
+        except Exception:
+            return v
+    for row in per_fund:
+        row["sharpe"] = _clean(row["sharpe"])
+        row["sortino"] = _clean(row["sortino"])
+        row["volatility"] = _clean(row["volatility"])
+    if portfolio_block:
+        portfolio_block = {k: _clean(v) for k, v in portfolio_block.items()}
+
+    return {"funds": per_fund, "portfolio": portfolio_block, "rf": rf}
+
+
+@app.get("/api/risk/real-return")
+def api_real_return(funds: str = "", start: str = "", end: str = ""):
+    """Base-100 nominal vs CPI-deflated (real) portfolio index."""
+    f_df = get_filtered_df(start, end)
+    if f_df.empty or _cpi.empty:
+        return {"series": [], "summary": {}}
+    prices = rm._pivot_prices(f_df)
+    codes = [c.strip() for c in funds.split(",") if c.strip()]
+    cols = [c for c in codes if c in prices.columns] or list(prices.columns)
+    base = prices[cols].iloc[0]
+    nominal = (prices[cols] / base * 100).mean(axis=1)
+    real = rm.real_return_series(nominal, _cpi)
+
+    series = []
+    for date in nominal.index:
+        series.append({
+            "date": date.strftime("%Y-%m-%d"),
+            "nominal": round(float(nominal.loc[date]), 2),
+            "real": round(float(real.loc[date]), 2) if date in real.index and not pd.isna(real.loc[date]) else None,
+        })
+    summary = {
+        "nominal_return": round(float(nominal.iloc[-1] / 100 - 1), 4) if not nominal.empty else None,
+        "real_return": round(float(real.iloc[-1] / 100 - 1), 4) if not real.empty else None,
+    }
+    return {"series": series, "summary": summary}
+
+
+@app.get("/api/risk/drawdown")
+def api_drawdown(funds: str = "", start: str = "", end: str = ""):
+    """Maximum peak-to-trough decline for the basket and an underwater curve."""
+    f_df = get_filtered_df(start, end)
+    if f_df.empty:
+        return {"mdd": 0, "underwater": []}
+    prices = rm._pivot_prices(f_df)
+    codes = [c.strip() for c in funds.split(",") if c.strip()]
+    cols = [c for c in codes if c in prices.columns] or list(prices.columns)
+    base = prices[cols].iloc[0]
+    index = (prices[cols] / base * 100).mean(axis=1)
+
+    summary = rm.max_drawdown(index)
+    running_peak = index.cummax()
+    underwater = ((index - running_peak) / running_peak).fillna(0)
+    return {
+        **summary,
+        "underwater": [
+            {"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
+            for d, v in underwater.items()
+        ],
+    }
+
+
+@app.get("/api/risk/correlation")
+def api_correlation(funds: str = "", start: str = "", end: str = ""):
+    f_df = get_filtered_df(start, end)
+    if f_df.empty:
+        return {"matrix": [], "score": None, "warnings": []}
+    prices = rm._pivot_prices(f_df)
+    codes = [c.strip() for c in funds.split(",") if c.strip()]
+    if len(codes) < 2:
+        return {"matrix": [], "score": None, "warnings": [], "avg_correlation": None}
+    corr = rm.correlation_matrix(prices, codes)
+    if corr.empty:
+        return {"matrix": [], "score": None, "warnings": []}
+
+    matrix = [
+        {"row": r, "col": c, "value": round(float(corr.at[r, c]), 3)}
+        for r in corr.index for c in corr.columns
+    ]
+    diagnostic = rm.diversification_score(corr)
+    return {"matrix": matrix, "codes": list(corr.columns), **diagnostic}
+
+
+@app.get("/api/risk/tax-impact")
+def api_tax_impact(funds: str = "", start: str = "", end: str = ""):
+    """For each fund: gross return, withholding rate, net-of-tax return."""
+    f_df = get_filtered_df(start, end)
+    if f_df.empty:
+        return []
+    codes = [c.strip() for c in funds.split(",") if c.strip()]
+    if not codes:
+        codes = list(f_df["FONKODU"].drop_duplicates().head(50))
+
+    out = []
+    for code in codes:
+        sub = f_df[f_df["FONKODU"] == code].sort_values("tarih")
+        if sub.empty:
+            continue
+        first = float(sub["FIYAT"].iloc[0])
+        last = float(sub["FIYAT"].iloc[-1])
+        gross = (last - first) / first if first else 0.0
+        category = sub["ana_kategori"].iloc[0] if "ana_kategori" in sub.columns else None
+        rate = rm.stopaj_rate(category)
+        net = rm.net_of_tax_return(gross, category)
+        out.append({
+            "code": code,
+            "category": category,
+            "gross_return": round(gross, 4),
+            "stopaj_rate": rate,
+            "net_return": round(net, 4) if net == net else None,
+        })
+    out.sort(key=lambda r: r["net_return"] or 0, reverse=True)
+    return out
+
+
+@app.get("/api/sentiment/crowded")
+def api_sentiment_crowded(start: str = "", end: str = "", window: int = 60):
+    """Mean-reversion / crowded-trade indicator on category-level inflows."""
+    f_df = get_filtered_df(start, end)
+    if f_df.empty:
+        return []
+    z = rm.category_flow_zscore(f_df[["tarih", "ana_kategori", "net_giris_tl"]], window=window)
+    return z.replace({np.nan: None}).to_dict(orient="records")
+
+
+# ==========================================
+# 🔐 AUTHENTICATION ENDPOINTS
 # ==========================================
 
 @app.post("/api/auth/register", response_model=UserResponse)
