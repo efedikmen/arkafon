@@ -20,6 +20,11 @@ TRADING_DAYS = 252
 # can override via API query string.
 DEFAULT_RF_ANNUAL = 0.45
 
+# Threshold for treating a standard deviation as effectively zero. Pandas'
+# .std() on an identical-value series leaks ~1e-19 of float-accumulation
+# noise on some platforms, so a strict `== 0` check would miss it.
+_STD_EPS = 1e-12
+
 # Stopaj (withholding tax) lookup. SPK categorises funds by underlying assets;
 # this map mirrors the rules in force from 2024 onwards. Anything not listed
 # falls back to 10% which is the generic TEFAS rate.
@@ -53,28 +58,38 @@ def daily_returns(prices: pd.DataFrame) -> pd.DataFrame:
 # -- 1. Sharpe / Sortino --------------------------------------------------
 
 def sharpe_ratio(returns: pd.Series, rf_annual: float = DEFAULT_RF_ANNUAL) -> float:
-    """Annualised Sharpe. Returns NaN when std is zero or series is empty."""
+    """Annualised Sharpe. Returns NaN when std is effectively zero."""
     r = returns.dropna()
     if r.empty:
         return float("nan")
     rf_daily = (1.0 + rf_annual) ** (1.0 / TRADING_DAYS) - 1.0
     excess = r - rf_daily
-    sigma = excess.std(ddof=1)
-    if not sigma or math.isclose(sigma, 0.0):
+    sigma = float(excess.std(ddof=1))
+    if pd.isna(sigma) or abs(sigma) < _STD_EPS:
         return float("nan")
     return float(excess.mean() / sigma * math.sqrt(TRADING_DAYS))
 
 
 def sortino_ratio(returns: pd.Series, rf_annual: float = DEFAULT_RF_ANNUAL) -> float:
-    """Like Sharpe but only penalises downside volatility."""
+    """Like Sharpe but only penalises downside volatility.
+
+    When there is no downside at all (every excess return >= 0) the ratio is
+    mathematically undefined; we follow the common convention of returning
+    +inf for positive mean excess and -inf for negative, NaN otherwise.
+    """
     r = returns.dropna()
     if r.empty:
         return float("nan")
     rf_daily = (1.0 + rf_annual) ** (1.0 / TRADING_DAYS) - 1.0
     excess = r - rf_daily
     downside = excess.where(excess < 0, 0.0)
-    dd_sigma = math.sqrt((downside ** 2).mean())
-    if not dd_sigma or math.isclose(dd_sigma, 0.0):
+    dd_sigma = math.sqrt(float((downside ** 2).mean()))
+    if pd.isna(dd_sigma) or abs(dd_sigma) < _STD_EPS:
+        mean_excess = float(excess.mean())
+        if mean_excess > 0:
+            return float("inf")
+        if mean_excess < 0:
+            return float("-inf")
         return float("nan")
     return float(excess.mean() / dd_sigma * math.sqrt(TRADING_DAYS))
 
