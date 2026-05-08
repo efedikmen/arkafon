@@ -1,11 +1,11 @@
 import os
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Float, Date
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
-from datetime import date
 
+# DB URL is env-driven so we can swap SQLite -> Postgres in deployment.
 SQLALCHEMY_DATABASE_URL = os.getenv(
     "ARKAFON_DATABASE_URL", "sqlite:///./arkafon.db")
 
@@ -43,6 +43,7 @@ class PortfolioItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     portfolio_id = Column(Integer, ForeignKey("portfolios.id"))
     fund_code = Column(String, index=True)
+    # Per-lot acquisition data (PR4 introduces these from the FE).
     acquired_at = Column(Date, nullable=True)
     acquisition_price = Column(Float, nullable=True)
     quantity = Column(Float, nullable=True)
@@ -83,6 +84,7 @@ class UserResponse(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
 
 
 class BasketUpdate(BaseModel):

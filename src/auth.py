@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -7,10 +8,16 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from src.db import get_db, User
 
-# Güvenlik Ayarları (Gerçek prodüksiyonda bu anahtar .env dosyasına saklanmalı)
-SECRET_KEY = "super-secret-arkafon-jwt-key-2026"
+# JWT signing key. MUST be supplied via env in production.
+_DEV_FALLBACK = "dev-only-do-not-ship"
+SECRET_KEY = os.getenv("ARKAFON_SECRET_KEY", _DEV_FALLBACK)
+if SECRET_KEY == _DEV_FALLBACK and os.getenv("ARKAFON_ENV", "dev") != "dev":
+    raise RuntimeError(
+        "ARKAFON_SECRET_KEY must be set in non-dev environments.")
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 Hafta oturum açık kalır
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv(
+    "ARKAFON_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -33,8 +40,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
-
-# Bu fonksiyon, korumalı API endpoint'lerine kimin girdiğini bulur
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
