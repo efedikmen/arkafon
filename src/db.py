@@ -1,17 +1,21 @@
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+import os
+from datetime import datetime
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, DateTime, Float, Date
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from pydantic import BaseModel, EmailStr
-from typing import List
+from typing import List, Optional
 
-# --- SQLALCHEMY VERİTABANI BAĞLANTISI ---
-# Veritabanı proje kök dizininde arkafon.db olarak oluşacak
-SQLALCHEMY_DATABASE_URL = "sqlite:///./arkafon.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={
-                       "check_same_thread": False})
+# DB URL is env-driven so we can swap SQLite -> Postgres in deployment.
+SQLALCHEMY_DATABASE_URL = os.getenv(
+    "ARKAFON_DATABASE_URL", "sqlite:///./arkafon.db")
+
+_engine_kwargs = {}
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(SQLALCHEMY_DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
-# --- VERİTABANI TABLOLARI (MODELS) ---
 
 
 class User(Base):
@@ -27,7 +31,8 @@ class Portfolio(Base):
     __tablename__ = "portfolios"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    name = Column(String)  # <--- İŞTE EKSİK OLAN VE ÇÖKMEYE NEDEN OLAN SATIR
+    name = Column(String, default="Ana Sepetim")
+    created_at = Column(DateTime, default=datetime.utcnow)
     owner = relationship("User", back_populates="portfolios")
     items = relationship(
         "PortfolioItem", back_populates="portfolio", cascade="all, delete")
@@ -38,10 +43,13 @@ class PortfolioItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     portfolio_id = Column(Integer, ForeignKey("portfolios.id"))
     fund_code = Column(String, index=True)
+    # Per-lot acquisition data (PR4 introduces these from the FE).
+    acquired_at = Column(Date, nullable=True)
+    acquisition_price = Column(Float, nullable=True)
+    quantity = Column(Float, nullable=True)
     portfolio = relationship("Portfolio", back_populates="items")
 
 
-# Tabloları oluştur (Eğer yoksa)
 Base.metadata.create_all(bind=engine)
 
 
@@ -51,8 +59,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-# --- PYDANTIC ŞEMALARI (API Girdi/Çıktı Kontrolü) ---
 
 
 class UserCreate(BaseModel):
@@ -82,3 +88,4 @@ class Token(BaseModel):
 
 class BasketUpdate(BaseModel):
     funds: List[str]
+    name: Optional[str] = None
