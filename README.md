@@ -40,7 +40,6 @@ arkafon/
 python3 -m venv .arkafon_env
 source .arkafon_env/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # then edit secrets
 ```
 
 ### Veri hazırlığı
@@ -49,6 +48,7 @@ Ham TEFAS `.parquet` dosyalarını `data/raw/` altına koyun:
 
 ```bash
 python -m src.data_loader
+python -m src.export_json
 ```
 
 ### API’yi çalıştırma
