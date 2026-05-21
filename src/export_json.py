@@ -94,7 +94,10 @@ def build_static_matrices(target_dir):
             "usd_try_daily_pct": round(((m_t0["usd"] - m_t1["usd"]) / m_t1["usd"]) * 100, 2) if m_t1["usd"] else 0.0,
             "usd_try_weekly_pct": round(((m_t0["usd"] - m_t7["usd"]) / m_t7["usd"]) * 100, 2) if m_t7["usd"] else 0.0,
             "gold_usd_daily_pct": round(((m_t0["gold"] - m_t1["gold"]) / m_t1["gold"]) * 100, 2) if m_t1["gold"] else 0.0,
-            "gold_usd_weekly_pct": round(((m_t0["gold"] - m_t7["gold"]) / m_t7["gold"]) * 100, 2) if m_t7["gold"] else 0.0
+            "gold_usd_weekly_pct": round(((m_t0["gold"] - m_t7["gold"]) / m_t7["gold"]) * 100, 2) if m_t7["gold"] else 0.0,
+            "usd_try_latest": round(float(m_t0["usd"]), 4),
+            "gold_usd_latest": round(float(m_t0["gold"]), 2),
+            "xau_try_latest": round(float(m_t0.get("xau_try", m_t0["usd"] * m_t0["gold"] / 31.1034768)), 2)
         },
         "series": series_data
     }
@@ -275,11 +278,10 @@ def build_static_matrices(target_dir):
         else:
             taxable_cap += float(val)
 
-    # Compile historic categorical series curves
+    # Compile historic categorical series curves over the trailing 30 sessions.
+    # (The previous implementation materialized a no-op groupby; dropped.)
     historical_by_type_series = []
-    df_grouped_series = df_flow.groupby(['tarih', 'FONKODU']).filter(lambda x: True)  # fast identity pass
 
-    # Subsample trailing chronology to thin files out safely
     unique_dates = sorted(df_flow['tarih'].unique())[-30:]
     for d_slice in unique_dates:
         df_slice = df_flow[df_flow['tarih'] == d_slice].copy()
