@@ -24,7 +24,8 @@ from src.classifier import _normalize, classify_fund
     ("HİSSE SENEDİ FONU",                           ("Hisse (TL)", "-")),
     ("BORÇLANMA ARAÇLARI FONU",                     ("Tahvil (TL)", "-")),
     ("KAMU BORÇLANMA FONU",                         ("Tahvil (TL)", "-")),
-    ("ALTIN KIYMETLİ MADEN FONU",                   ("Döviz", "Kıymetli Maden / Emtia")),
+    ("ALTIN KIYMETLİ MADEN FONU",
+     ("Döviz", "Kıymetli Maden / Emtia")),
     ("EUROBOND BORÇLANMA FONU",                     ("Döviz", "Eurobond")),
     ("YABANCI HİSSE SENEDİ FONU",                   ("Döviz", "Yabancı Hisse")),
     ("YABANCI BORÇLANMA ARAÇLARI FONU",             ("Döviz", "Yabancı Tahvil")),
@@ -81,8 +82,10 @@ def test_normalize_uppercases_ascii():
 
 
 def test_normalize_strips_parens_and_dashes():
-    # Parens and dashes get replaced with spaces; a double-space collapses once.
-    assert _normalize("EUROBOND-FONU (PRO)") == "EUROBOND FONU  PRO"
+    # Parens and dashes get replaced with spaces; the single .replace("  ", " ")
+    # pass collapses the run of consecutive spaces produced where "-" sits
+    # adjacent to "(", and the trailing space from ")" is stripped.
+    assert _normalize("EUROBOND-FONU (PRO)") == "EUROBOND FONU PRO"
 
 
 def test_normalize_handles_non_string():
