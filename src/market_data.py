@@ -13,15 +13,15 @@ to re-run on backfill days without losing prior history.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
-from datetime import datetime, timedelta
 
 import pandas as pd
 
-from src.config import PROCESSED_DATA_DIR
+from src.config import MARKET_DATA_PATH
 
-MARKET_DATA_PATH = os.path.join(PROCESSED_DATA_DIR, "market_data.parquet")
+log = logging.getLogger(__name__)
 
 USD_TRY_TICKER = "TRY=X"   # USD priced in TRY (i.e. how many TRY per 1 USD)
 GOLD_TICKER = "GC=F"        # COMEX gold front-month futures, USD per troy ounce
@@ -86,19 +86,23 @@ def merge_and_write(fresh: pd.DataFrame, out_path: str = MARKET_DATA_PATH) -> pd
 
 
 def main(period: str = "5y") -> None:
-    print(f"[market_data] Fetching USD/TRY and gold (period={period})...")
+    log.info("Fetching USD/TRY and gold (period=%s)...", period)
     fresh = fetch_markers(period=period)
-    print(f"[market_data] Fetched {len(fresh)} dated observations.")
+    log.info("Fetched %d dated observations.", len(fresh))
 
     combined = merge_and_write(fresh)
     latest = combined.iloc[-1]
-    print(
-        f"[market_data] Wrote {MARKET_DATA_PATH} "
-        f"({len(combined)} rows; latest {latest['tarih'].strftime('%Y-%m-%d')}: "
-        f"USD/TRY={latest['usd_try']:.4f}, gold_usd={latest['gold_usd']:.2f})."
+    log.info(
+        "Wrote %s (%d rows; latest %s: USD/TRY=%.4f, gold_usd=%.2f).",
+        MARKET_DATA_PATH,
+        len(combined),
+        latest["tarih"].strftime("%Y-%m-%d"),
+        latest["usd_try"],
+        latest["gold_usd"],
     )
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     period = sys.argv[1] if len(sys.argv) > 1 else "5y"
     main(period=period)
