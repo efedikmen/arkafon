@@ -1,114 +1,190 @@
+"""Compile raw daily TEFAS parquet snapshots into one master file.
+
+Pipeline stage 2 of 4 (updater -> **data_loader** -> market_data -> export_json).
+
+The input is whatever TEFAS snapshots `updater.py` has accumulated in
+``data/raw/tefas_data_DD.MM.YYYY.parquet``. The output is a single file
+at ``data/processed/master_flow_data.parquet`` with these columns:
+
+    tarih          datetime64[ns]  trade date, normalized
+    FONKODU        object          fund code (string)
+    FONUNVAN       object          official fund name
+    FIYAT          float64         NAV price for the day
+    TEDPAYSAYISI   float64         circulating shares on the day
+    net_giris_tl   float64         net capital flow vs. previous session (TRY)
+    ana_kategori   object          SPK-canonical category (classifier.py)
+    alt_kategori   object          SPK-canonical sub-category
+    be_kategori    object          one of six dashboard buckets used by the FE
+
+``net_giris_tl`` uses a split-aware formula: when a fund's NAV changes by
+more than 5x or less than 0.2x day-over-day, we treat it as a corporate
+action (share-class split / reverse-split) and rescale the prior session's
+share count by the nearest power of ten so the computed flow only
+reflects subscriptions / redemptions.
+"""
+from __future__ import annotations
+
+import logging
 import os
-import pandas as pd
+from typing import List, Optional
+
 import numpy as np
-from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR, MASTER_DATA_PATH
+import pandas as pd
+
+from src.classifier import classify_fund
+from src.config import MASTER_DATA_PATH, PROCESSED_DATA_DIR, RAW_DATA_DIR
+
+log = logging.getLogger(__name__)
+
+REQUIRED_COLS = ("FONKODU", "FONUNVAN", "FIYAT", "TEDPAYSAYISI")
+
+# Bridge from classifier.py's SPK-canonical labels to the six dashboard
+# buckets the frontend renders. Keys are (ana_kategori, alt_kategori);
+# alt_kategori is matched first with a wildcard "*" fallback.
+_BE_BUCKET_MAP = {
+    ("PPF (TL)",      "*"): "Para Piyasası",
+    ("Hisse (TL)",    "*"): "Hisse",
+    ("Tahvil (TL)",   "*"): "Borçlanma",
+    ("Döviz",         "Kıymetli Maden / Emtia"): "Kıymetli Madenler",
+    ("Döviz",         "Eurobond"):               "Borçlanma",
+    ("Döviz",         "Yabancı Hisse"):          "Hisse",
+    ("Döviz",         "Yabancı Tahvil"):         "Borçlanma",
+    ("Döviz",         "Döviz PPF"):              "Para Piyasası",
+    ("Döviz",         "*"):                      "Uluslararası",
+    ("Katılım Fonu",  "*"): "Uluslararası",
+    ("Fon Sepeti",    "*"): "Değişken",
+    ("Serbest Fon",   "*"): "Değişken",
+    ("Değişken Fon",  "*"): "Değişken",
+    ("Karma Fon",     "*"): "Değişken",
+    ("Diğer",         "*"): "Değişken",
+}
 
 
-def build_master_data():
-    print("🚀 Bloomberg Terminal Standartlarında ETL Motoru Başlatılıyor...")
+def _to_be_bucket(ana: str, alt: str) -> str:
+    return (
+        _BE_BUCKET_MAP.get((ana, alt))
+        or _BE_BUCKET_MAP.get((ana, "*"))
+        or "Değişken"
+    )
 
-    all_files = sorted([f for f in os.listdir(
-        RAW_DATA_DIR) if f.endswith(".parquet")])
-    if not all_files:
-        print("❌ Hata: data/raw/ klasöründe veri yok!")
-        return
 
-    all_dfs = []
+def _load_daily_files() -> Optional[pd.DataFrame]:
+    """Concat every well-formed raw parquet into a single long frame."""
+    if not os.path.isdir(RAW_DATA_DIR):
+        log.error("Raw data directory missing: %s", RAW_DATA_DIR)
+        return None
 
-    for file_name in all_files:
+    files = sorted(f for f in os.listdir(RAW_DATA_DIR) if f.endswith(".parquet"))
+    if not files:
+        log.error("No raw parquet files found under %s", RAW_DATA_DIR)
+        return None
+
+    frames: List[pd.DataFrame] = []
+    for name in files:
+        # File name convention: tefas_data_DD.MM.YYYY.parquet
         try:
-            date_str = file_name.split('_')[-1].replace('.parquet', '')
-            current_date = pd.to_datetime(date_str, format="%d.%m.%Y")
-        except Exception:
+            date_str = name.split("_")[-1].removesuffix(".parquet")
+            tarih = pd.to_datetime(date_str, format="%d.%m.%Y")
+        except (ValueError, IndexError):
+            log.warning("Skipping un-parseable filename: %s", name)
             continue
 
-        file_path = os.path.join(RAW_DATA_DIR, file_name)
-
         try:
-            df = pd.read_parquet(file_path)
-        except Exception:
+            df = pd.read_parquet(os.path.join(RAW_DATA_DIR, name))
+        except (OSError, ValueError) as exc:
+            log.warning("Skipping unreadable %s: %s", name, exc)
             continue
 
         df.columns = df.columns.str.strip().str.upper()
-
-        if not all(col in df.columns for col in ["FONKODU", "FONUNVAN", "FIYAT", "TEDPAYSAYISI"]):
+        if not all(c in df.columns for c in REQUIRED_COLS):
+            log.warning("Skipping %s: missing required columns", name)
             continue
 
-        # Sadece temiz kolonları al ve listeye ekle
-        df_filtered = df[["FONKODU", "FONUNVAN",
-                          "FIYAT", "TEDPAYSAYISI"]].copy()
-        df_filtered["FONKODU"] = df_filtered["FONKODU"].astype(
-            str).str.strip()  # Boşluklardan kurtul
-        df_filtered["tarih"] = current_date
-        all_dfs.append(df_filtered)
+        df = df.loc[:, list(REQUIRED_COLS)].copy()
+        df["FONKODU"] = df["FONKODU"].astype(str).str.strip()
+        df["tarih"] = tarih
+        frames.append(df)
 
-    if not all_dfs:
-        print("⚠️ Hesaplanacak geçerli veri bulunamadı.")
-        return
+    if not frames:
+        log.error("No raw files yielded usable rows.")
+        return None
+    return pd.concat(frames, ignore_index=True)
 
-    print("📦 Veriler birleştiriliyor (Vektörel Hesaplama)...")
-    master_df = pd.concat(all_dfs, ignore_index=True)
 
-    # 1. KRİTİK ADIM: Fon koduna ve tarihe göre kesin sıralama
-    master_df = master_df.sort_values(by=["FONKODU", "tarih"])
+def _correct_splits_and_compute_flows(df: pd.DataFrame) -> pd.DataFrame:
+    """Add net_giris_tl with corporate-action correction.
 
-    # 2. Önceki günün verilerini yan kolona kaydır
-    master_df["FIYAT_prev"] = master_df.groupby("FONKODU")["FIYAT"].shift(1)
-    master_df["TEDPAYSAYISI_prev"] = master_df.groupby(
-        "FONKODU")["TEDPAYSAYISI"].shift(1)
+    For each fund, the previous session's share count is rescaled by the
+    nearest power of ten whenever a >5x or <0.2x price jump suggests a
+    split. The flow is then ``(shares_today - shares_yesterday_corrected)
+    * price_today``, which cancels out the mechanical share-count change
+    and leaves only real subscriptions / redemptions.
+    """
+    df = df.sort_values(["FONKODU", "tarih"]).reset_index(drop=True)
 
-    # 3. YENİ ADIM: SPLIT (BÖLÜNME) ANOMALİSİ DÜZELTİCİ (Data Healer)
-    print("🩹 Fon bölünme (split) anomalileri tespit edilip onarılıyor...")
-    master_df['fiyat_degisim'] = master_df['FIYAT'] / master_df['FIYAT_prev']
-    master_df['split_factor'] = 1.0
+    grouped = df.groupby("FONKODU", sort=False)
+    prev_price = grouped["FIYAT"].shift(1)
+    prev_shares = grouped["TEDPAYSAYISI"].shift(1)
 
-    # Fiyat 5 kattan fazla arttıysa veya 5'te 1'ine düştüyse
-    sapma_mask = (master_df['fiyat_degisim'] > 5.0) | (
-        master_df['fiyat_degisim'] < 0.2)
+    # Detect split factor only where we have a previous session to compare.
+    price_ratio = df["FIYAT"] / prev_price
+    suspicious = (price_ratio > 5.0) | (price_ratio < 0.2)
 
-    if sapma_mask.any():
-        # Sapan değerleri 10'un en yakın kuvvetine yuvarla (Örn: 100.39 -> 10^2 = 100)
-        master_df.loc[sapma_mask, 'split_factor'] = 10 ** np.round(
-            np.log10(master_df.loc[sapma_mask, 'fiyat_degisim']))
+    split_factor = pd.Series(1.0, index=df.index, dtype="float64")
+    if suspicious.any():
+        # Round the log10 of the ratio to nail down the cleanest power of ten
+        # (e.g. 99.7 -> 100, 0.099 -> 0.1).
+        split_factor.loc[suspicious] = 10.0 ** np.round(
+            np.log10(price_ratio.loc[suspicious])
+        )
 
-    # Dünkü payı bölünme çarpanına bölerek bugünün elmasıyla eşitliyoruz
-    master_df['normalize_pay_onceki'] = master_df['TEDPAYSAYISI_prev'] / \
-        master_df['split_factor']
-
-    # 4. GERÇEK NAKİT AKIŞI HESABI
-    # Eğer previous NaN ise (verinin ilk günü), farkı 0 kabul et. Böylece Portföy büyüklüğü Inflow gibi görünmez.
-    master_df["pay_farki"] = master_df["TEDPAYSAYISI"] - \
-        master_df["normalize_pay_onceki"]
-    master_df["pay_farki"] = master_df["pay_farki"].fillna(0)
-
-    master_df["net_giris_tl"] = master_df["pay_farki"] * master_df["FIYAT"]
-
-    # Bellek temizliği: Geçici hesaplama kolonlarını uçur
-    master_df = master_df.drop(columns=['FIYAT_prev', 'TEDPAYSAYISI_prev',
-                               'fiyat_degisim', 'split_factor', 'normalize_pay_onceki', 'pay_farki'])
-
-    # 5. Tasnifleme (Classifier)
-    print("🔍 Fonlar SPK standartlarına göre tasnif ediliyor...")
-    from src.classifier import classify_fund
-    unique_funds = master_df[["FONKODU", "FONUNVAN"]].drop_duplicates()
-    unique_funds[["ana_kategori", "alt_kategori"]] = pd.DataFrame(
-        unique_funds["FONUNVAN"].apply(classify_fund).tolist(),
-        index=unique_funds.index
+    corrected_prev_shares = prev_shares / split_factor
+    df["net_giris_tl"] = (
+        (df["TEDPAYSAYISI"] - corrected_prev_shares).fillna(0.0)
+        * df["FIYAT"]
     )
 
-    master_df = master_df.merge(
-        unique_funds[["FONKODU", "ana_kategori", "alt_kategori"]], on="FONKODU", how="left")
+    return df
 
-    # Final formatı
-    final_cols = ["tarih", "FONKODU", "FONUNVAN", "FIYAT",
-                  "net_giris_tl", "ana_kategori", "alt_kategori"]
-    master_df = master_df[final_cols]
+
+def _assign_categories(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach ana_kategori / alt_kategori / be_kategori columns."""
+    unique = df[["FONKODU", "FONUNVAN"]].drop_duplicates().copy()
+    classified = unique["FONUNVAN"].apply(classify_fund).tolist()
+    unique[["ana_kategori", "alt_kategori"]] = pd.DataFrame(classified, index=unique.index)
+    unique["be_kategori"] = [_to_be_bucket(a, s) for a, s in classified]
+    return df.merge(
+        unique[["FONKODU", "ana_kategori", "alt_kategori", "be_kategori"]],
+        on="FONKODU",
+        how="left",
+    )
+
+
+def build_master_data() -> Optional[str]:
+    """Run the full ETL. Returns the output path on success, or None."""
+    log.info("Loading raw daily snapshots...")
+    df = _load_daily_files()
+    if df is None:
+        return None
+
+    log.info("Correcting splits and computing flows for %d rows...", len(df))
+    df = _correct_splits_and_compute_flows(df)
+
+    log.info("Assigning SPK and dashboard categories...")
+    df = _assign_categories(df)
+
+    final_cols = [
+        "tarih", "FONKODU", "FONUNVAN", "FIYAT", "TEDPAYSAYISI",
+        "net_giris_tl", "ana_kategori", "alt_kategori", "be_kategori",
+    ]
+    df = df.loc[:, final_cols]
 
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
-    master_df.to_parquet(MASTER_DATA_PATH)
-    print(
-        f"✅ Başarılı! {len(master_df)} satırlık temizlenmiş nakit akışı verisi oluşturuldu.")
+    df.to_parquet(MASTER_DATA_PATH)
+    log.info("Wrote %s (%d rows)", MASTER_DATA_PATH, len(df))
+    return MASTER_DATA_PATH
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     build_master_data()
