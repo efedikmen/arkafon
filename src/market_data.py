@@ -1,91 +1,108 @@
-import yfinance as yf
-import pandas as pd
+"""
+market_data.py — Currency marker ingest for the Jamstack pipeline.
+
+Fetches USD/TRY spot and gold (XAU/USD spot, troy ounce) from Yahoo Finance
+and persists them to ``data/processed/market_data.parquet`` with three
+columns: ``tarih`` (date, normalized), ``usd_try`` (float), ``gold_usd``
+(float).
+
+The file is written idempotently: every run merges the current parquet
+(if any) with freshly fetched rows, drops duplicate dates (keeping the
+latest fetch), and re-writes the full file. This makes the script safe
+to re-run on backfill days without losing prior history.
+"""
+from __future__ import annotations
+
+import logging
 import os
-import requests
-from datetime import datetime, date
-from src.config import DATA_DIR  # Config dosyasından veri ana dizinini alıyoruz
+import sys
 
-# Piyasaların kaydedileceği yol
-MARKET_DATA_PATH = os.path.join(DATA_DIR, "processed", "market_data.parquet")
+import pandas as pd
+
+from src.config import MARKET_DATA_PATH
+
+log = logging.getLogger(__name__)
+
+USD_TRY_TICKER = "TRY=X"   # USD priced in TRY (i.e. how many TRY per 1 USD)
+GOLD_TICKER = "GC=F"        # COMEX gold front-month futures, USD per troy ounce
 
 
-def update_market_data(tcmb_api_key=None):
+def _yf_history(ticker: str, period: str) -> pd.DataFrame:
+    """Thin wrapper around yfinance.Ticker(...).history with a clear error."""
+    try:
+        import yfinance as yf
+    except ImportError as e:
+        raise RuntimeError(
+            "yfinance is required for market_data.py. Install it with "
+            "`pip install yfinance`."
+        ) from e
 
-    tcmb_api_key = tcmb_api_key or os.getenv("TCMB_API_KEY")
+    df = yf.Ticker(ticker).history(period=period, auto_adjust=False)
+    if df.empty:
+        raise RuntimeError(f"yfinance returned no rows for {ticker} ({period}).")
+    return df
 
-    if tcmb_api_key:
-        print("🔑 TCMB API key bulundu")
+
+def _series_from_history(df: pd.DataFrame, col: str = "Close") -> pd.Series:
+    s = df[col].copy()
+    s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+    s = s.groupby(s.index).last()
+    return s.astype(float)
+
+
+def fetch_markers(period: str = "5y") -> pd.DataFrame:
+    """Fetch the full USD/TRY + gold history over the given lookback."""
+    usd = _series_from_history(_yf_history(USD_TRY_TICKER, period))
+    gold = _series_from_history(_yf_history(GOLD_TICKER, period))
+
+    frame = pd.concat(
+        [usd.rename("usd_try"), gold.rename("gold_usd")], axis=1
+    ).dropna(how="all")
+    frame = frame.ffill().dropna()
+    frame.index.name = "tarih"
+    return frame.reset_index()
+
+
+def merge_and_write(fresh: pd.DataFrame, out_path: str = MARKET_DATA_PATH) -> pd.DataFrame:
+    """Merge a freshly fetched frame with the on-disk parquet and persist."""
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    if os.path.exists(out_path):
+        existing = pd.read_parquet(out_path)
+        existing["tarih"] = pd.to_datetime(existing["tarih"]).dt.normalize()
+        combined = pd.concat([existing, fresh], ignore_index=True)
     else:
-        print("⚠️ TCMB API key yok, Yahoo verisi kullanılacak")
+        combined = fresh.copy()
 
-    print("📈 Piyasa verileri güncelleniyor...")
-    start_date = "2020-01-01"
-    end_date = date.today().strftime('%Y-%m-%d')
+    combined["tarih"] = pd.to_datetime(combined["tarih"]).dt.normalize()
+    combined = (
+        combined.sort_values("tarih")
+        .drop_duplicates(subset=["tarih"], keep="last")
+        .reset_index(drop=True)
+    )
 
-    # 1. YAHOO FINANCE'TEN ALTIN (ve yedek USD/TRY) ÇEK
-    # GC=F -> Altın (Gold Futures), TRY=X -> USD/TRY
-    tickers = ["GC=F", "TRY=X"]
-    print("  ⏳ Yahoo Finance'ten Altın ve Kur verileri çekiliyor...")
-    df_yf = yf.download(tickers, start=start_date,
-                        end=end_date, progress=False)
-
-    # Sadece kapanış (Close) fiyatlarını alıyoruz
-    df = df_yf['Close'].reset_index()
-    # Sütun isimlerini temizle
-    df.columns = ['tarih', 'gold_usd', 'usd_try_yf']
-    df['tarih'] = pd.to_datetime(df['tarih']).dt.normalize()
-
-    # 2. TCMB RESMİ KURU (EVDS API)
-    # Eğer API Key yoksa Yahoo'nun bankalararası kurunu TCMB gibi kabul edeceğiz
-    df['usd_try'] = df['usd_try_yf']
-
-    if tcmb_api_key:
-        print("  ⏳ TCMB EVDS'den resmi USD/TRY kurları çekiliyor...")
-        try:
-            url = f"https://evds2.tcmb.gov.tr/service/evds/series=TP.DK.USD.S.YTL&startDate=01-01-2020&endDate={date.today().strftime('%d-%m-%Y')}&type=json"
-            headers = {"key": tcmb_api_key}
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                tcmb_data = response.json().get('items', [])
-                tcmb_df = pd.DataFrame(tcmb_data)
-                tcmb_df['tarih'] = pd.to_datetime(
-                    tcmb_df['Tarih'], format="%d-%m-%Y")
-                tcmb_df['TP_DK_USD_S_YTL'] = pd.to_numeric(
-                    tcmb_df['TP_DK_USD_S_YTL'], errors='coerce')
-
-                # Yahoo tarihleriyle TCMB tarihlerini birleştir
-                df = df.merge(
-                    tcmb_df[['tarih', 'TP_DK_USD_S_YTL']], on='tarih', how='left')
-                # TCMB verisi olan günlerde TCMB'yi, olmayan günlerde (tatiller vb) Yahoo'yu kullan
-                df['usd_try'] = df['TP_DK_USD_S_YTL'].combine_first(
-                    df['usd_try_yf'])
-                df.drop(columns=['TP_DK_USD_S_YTL'], inplace=True)
-                print("  ✅ TCMB kurları başarıyla entegre edildi.")
-        except Exception as e:
-            print(
-                f"  ❌ TCMB verisi çekilemedi, Yahoo kuru ile devam ediliyor: {e}")
-
-    # Eksik verileri (hafta sonu vb.) bir önceki günün kapanışıyla doldur (Forward Fill)
-    df = df.ffill()
-
-    # Parquet olarak kaydet
-    os.makedirs(os.path.dirname(MARKET_DATA_PATH), exist_ok=True)
-    df.to_parquet(MARKET_DATA_PATH)
-    print("✅ Piyasa verileri master dosyaya kaydedildi!")
+    combined.to_parquet(out_path, index=False)
+    return combined
 
 
-def get_market_data(start_date, end_date):
-    """API'nin grafiği çizerken okuyacağı çok hızlı fonksiyon"""
-    if not os.path.exists(MARKET_DATA_PATH):
-        # İlk çalışmada dosya yoksa indir
-        update_market_data()
+def main(period: str = "5y") -> None:
+    log.info("Fetching USD/TRY and gold (period=%s)...", period)
+    fresh = fetch_markers(period=period)
+    log.info("Fetched %d dated observations.", len(fresh))
 
-    df = pd.read_parquet(MARKET_DATA_PATH)
-    mask = (df['tarih'] >= pd.to_datetime(start_date)) & (
-        df['tarih'] <= pd.to_datetime(end_date))
-    return df[mask].set_index('tarih')
+    combined = merge_and_write(fresh)
+    latest = combined.iloc[-1]
+    log.info(
+        "Wrote %s (%d rows; latest %s: USD/TRY=%.4f, gold_usd=%.2f).",
+        MARKET_DATA_PATH,
+        len(combined),
+        latest["tarih"].strftime("%Y-%m-%d"),
+        latest["usd_try"],
+        latest["gold_usd"],
+    )
 
 
 if __name__ == "__main__":
-    # Test etmek için direkt çalıştırılabilir
-    update_market_data()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    period = sys.argv[1] if len(sys.argv) > 1 else "5y"
+    main(period=period)
