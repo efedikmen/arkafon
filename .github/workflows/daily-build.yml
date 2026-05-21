@@ -96,3 +96,24 @@ jobs:
           done
           echo "Push failed after 4 attempts." >&2
           exit 1
+
+      - name: Send e-mail on failure
+        if: failure() 
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "🚨 ArkaFon Pipeline Failure Alert!"
+          body: |
+            ArkaFon Daily Static Build pipeline has FAILED.
+            
+            Workflow: ${{ github.workflow }}
+            Run ID: ${{ github.run_id }}
+            Commit: ${{ github.sha }}
+            
+            Check the runner logs immediately to prevent data stagnation:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: cansincomert@gmail.com
+          from: ArkaFon Engine Bot <arkafon-bot@users.noreply.github.com>
